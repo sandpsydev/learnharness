@@ -528,3 +528,21 @@ describe("the listener", () => {
 		assert.equal(mode, 0o600);
 	});
 });
+
+// ─── the line the spec draws ─────────────────────────────────────────────────
+
+describe("the app never queries UpToDate", () => {
+	it("no app source names the Expert AI host — only the learner's extension ever talks to it", () => {
+		const root = path.resolve(import.meta.dirname, "..");
+		const offenders: string[] = [];
+		const walk = (dir: string) => {
+			for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+				const full = path.join(dir, entry.name);
+				if (entry.isDirectory()) walk(full);
+				else if (/\.(ts|tsx|cjs|mjs|js|md)$/.test(entry.name) && /uptodate\.com/i.test(fs.readFileSync(full, "utf-8"))) offenders.push(path.relative(root, full));
+			}
+		};
+		for (const dir of ["src", "app", "components", "electron"]) walk(path.join(root, dir));
+		assert.deepEqual(offenders, []);
+	});
+});

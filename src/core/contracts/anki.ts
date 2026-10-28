@@ -15,6 +15,7 @@
 
 import { isOrganSystem, sanitizeSystems, type OrganSystem } from "./graph.ts";
 import type { JobUsage } from "./jobs.ts";
+import type { LibraryTocEntry } from "./library.ts";
 
 // ─── decks ──────────────────────────────────────────────────────────────────
 
@@ -102,10 +103,10 @@ export interface AnkiCard {
 export type AnkiOrigin =
 	| { kind: "session"; chatId: string }
 	| { kind: "nodes"; nodeIds: string[] }
-	/** SEAM for the PDF library (`med-library`, not merged yet): `ref` is an
-	 *  opaque handle that task decides (book + page range). Nothing resolves
-	 *  it today; the service answers "not available yet". */
-	| { kind: "library"; ref: string };
+	/** A section of a library book (Settings → Library): `bookId` is the book's
+	 *  id and `pages` the library's page spec ("12-20", "3,5", "all"; for a
+	 *  SlideScribe note these are slide numbers, "extra" the extra notes). */
+	| { kind: "library"; bookId: string; pages: string };
 
 export type AnkiDraftStatus = "generating" | "ready" | "error";
 
@@ -134,7 +135,17 @@ export interface AnkiDraft {
 export function originKeyOf(origin: AnkiOrigin): string {
 	if (origin.kind === "session") return `session:${origin.chatId}`;
 	if (origin.kind === "nodes") return `nodes:${[...new Set(origin.nodeIds)].sort().join(",")}`;
-	return `library:${origin.ref}`;
+	return `library:${origin.bookId}:${origin.pages.trim().toLowerCase().replace(/\s+/g, "")}`;
+}
+
+/** The page spec of one outline entry: from its page to the page before the
+ *  next entry at the same or a shallower level (or the book's last page). */
+export function tocSectionPages(toc: readonly LibraryTocEntry[], index: number, pageCount: number): string {
+	const entry = toc[index];
+	if (!entry) return "all";
+	const next = toc.slice(index + 1).find((e) => e.depth <= entry.depth && e.page > entry.page);
+	const last = Math.max(entry.page, next ? next.page - 1 : pageCount);
+	return last > entry.page ? `${entry.page}-${last}` : String(entry.page);
 }
 
 // ─── sanitizing (model output and PUT bodies) ───────────────────────────────

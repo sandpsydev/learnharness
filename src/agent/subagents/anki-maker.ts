@@ -100,7 +100,18 @@ RULES
 - Pick "system" for each card from the allowed list; that decides its Anki deck.
 - Draft only what is worth remembering; skip pleasantries, scaffolding questions and meta-talk. Zero cards is a valid answer.
 
+Material taken from a library book is split under headers like "--- Book title p.12 ---" (a lecture note: "slide 7"); that
+header is the citation for the text beneath it. Use it as a management card's source. A lecture note's own ⚠ marks and
+"(AI read — verify)" flags mean the passage is unverified: do not draft a management card from it unless the same fact is
+sourced elsewhere.
+
 Submit ONE submit_cards call containing every card.`;
+
+/** Added to the instructions only when the library tools are given. */
+export const ANKI_MAKER_LIBRARY_NOTE = `
+
+You also have library_search and library_read over the learner's own books. Use them only to look up a point the
+material leaves unclear or to find a citation; stay on the topic of the material you were given.`;
 
 /** A hint the material can carry about where it sits in the graph. */
 export interface MakerHints {
@@ -173,7 +184,9 @@ export async function runAnkiMaker(opts: {
 			});
 			return problems.length > 0 ? problems.join(" ") : null;
 		},
-		systemPrompt: ANKI_MAKER_INSTRUCTIONS,
+		systemPrompt: opts.extraTools ? ANKI_MAKER_INSTRUCTIONS + ANKI_MAKER_LIBRARY_NOTE : ANKI_MAKER_INSTRUCTIONS,
+		// Looking things up takes turns; a plain draft needs only the submit and its fixes.
+		maxTurns: opts.extraTools ? 12 : undefined,
 		prompt: `Material: ${opts.title}\n\n${opts.material}`,
 		engine: opts.engine,
 		signal: opts.signal,

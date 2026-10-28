@@ -457,8 +457,10 @@ export function AnkiDialog({ origin, onClose }: { origin: AnkiOrigin | null; onC
 				close();
 			}
 		};
-		document.addEventListener("keydown", onKeyDown);
-		return () => document.removeEventListener("keydown", onKeyDown);
+		// Capture phase: when opened over another dialog (Settings → Library),
+		// this Esc must close only the panel, before that dialog's own listener runs.
+		document.addEventListener("keydown", onKeyDown, true);
+		return () => document.removeEventListener("keydown", onKeyDown, true);
 	}, [origin, pushing, close]);
 
 	const push = async () => {
@@ -519,7 +521,7 @@ export function AnkiDialog({ origin, onClose }: { origin: AnkiOrigin | null; onC
 	return createPortal(
 		<div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80" {...backdropDismiss}>
 			<AnkiReviewBody
-				title={draft?.title ?? (origin.kind === "nodes" ? `${origin.nodeIds.length} nodes` : "Session")}
+				title={draft?.title ?? (origin.kind === "nodes" ? `${origin.nodeIds.length} nodes` : origin.kind === "library" ? "Library section" : "Session")}
 				phase={phase}
 				activity={draft?.activity ?? ""}
 				error={error}

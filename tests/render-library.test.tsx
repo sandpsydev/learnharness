@@ -74,6 +74,14 @@ describe("LibraryView", () => {
 		assert.match(html, /data-testid="library-empty"/);
 	});
 
+	it("a ready book offers Make Anki cards when the Anki action is wired; an indexing one does not", () => {
+		const ready = view({ listing: listing([book({})]), onMakeCards: noop });
+		assert.match(ready, /data-testid="library-anki-bk_a1"[^>]*>Make Anki cards…/);
+		assert.ok(!view({ listing: listing([book({})]) }).includes("library-anki-"), "no Anki action without the handler");
+		const indexing = view({ listing: listing([book({ status: "indexing", progress: { phase: "reading", done: 1, total: 10 } })]), onMakeCards: noop });
+		assert.ok(!indexing.includes("library-anki-"), "not while indexing");
+	});
+
 	it("each pending PDF asks the per-PDF question; text only is the default", () => {
 		const html = view({ pending: [{ file: pdf("Slides.pdf"), mode: "text" }, { file: pdf("Book.pdf"), mode: "vision" }] });
 		assert.match(html, /data-testid="library-pending-0"/);

@@ -38,10 +38,11 @@ describe("/api/anki routes", () => {
 		assert.equal((await post({ origin: { kind: "nodes", nodeIds: ["n_nope"] } })).status, 404);
 	});
 
-	it("says plainly that the library trigger is not wired yet", async () => {
-		const res = await post({ origin: { kind: "library", ref: "book:p1" } });
-		assert.equal(res.status, 501);
-		assert.equal(((await res.json()) as { code: string }).code, "library_not_wired");
+	it("answers a library section with an honest message while the library has no books", async () => {
+		const res = await post({ origin: { kind: "library", bookId: "book_nope", pages: "1-5" } });
+		assert.equal(res.status, 404);
+		assert.match(((await res.json()) as { error: string }).error, /no searchable books/);
+		assert.equal((await post({ origin: { kind: "library", bookId: "b" } })).status, 400);
 	});
 
 	it("lists no drafts at first, and 404s every per-draft route for an unknown id", async () => {

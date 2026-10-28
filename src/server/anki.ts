@@ -44,6 +44,10 @@ import {
 import { getGraph } from "../core/graph.ts";
 import type { ChatStore, GraphStore } from "../core/ports.ts";
 import { sessionMarkdown } from "../core/session-markdown.ts";
+import { citationFor, marksNotice, VISION_NOTICE } from "../core/library.ts";
+import { libraryTools } from "../agent/tools/library.ts";
+import type { LibraryReader } from "../agent/library/searcher.ts";
+import { library } from "./library.ts";
 import { ankiDraftStore, newDraftId, type AnkiDraftStore } from "../store/anki.ts";
 import { providerKeyPresent } from "./keys.ts";
 import { stores } from "./stores.ts";
@@ -76,11 +80,10 @@ export interface AnkiServiceDeps {
 	/** AnkiConnect transport; tests always pass a fake. */
 	fetch?: typeof fetch;
 	/**
-	 * SEAM for the PDF library trigger (`med-library`): resolve a library
-	 * origin to material (and its library_search / library_read tools). Left
-	 * unset until that work merges: library requests then answer 501.
+	 * Resolve a library origin (a section of a book) to material plus the
+	 * library tools. Wired to the real library below; tests pass a fake reader.
 	 */
-	resolveLibrary?: (origin: Extract<AnkiOrigin, { kind: "library" }>) => Promise<AnkiMaterial>;
+	resolveLibrary?: (origin: Extract<AnkiOrigin, { kind: "library" }>) => Promise<AnkiMaterial | AnkiFailure> | AnkiMaterial | AnkiFailure;
 	/** Test seam: shrink the run limit. */
 	runLimitMs?: number;
 }
@@ -141,6 +144,49 @@ function nodesMaterial(
 	};
 }
 
+// ─── library sections ───────────────────────────────────────────────────────
+
+/** Most pages (slides) one request may cover: keeps a "section" a section, not a whole textbook. */
+export const MAX_LIBRARY_PAGES = 60;
+
+/**
+ * The material for a library section: the pages' text, each under its
+ * citation header ("--- Book p.12 ---"), with a lecture note's ⚠ / AI-read
+ * marks and image-description notices kept beside the passage. The card
+ * maker also gets library_search / library_read to look a point up.
+ */
+export function libraryMaterial(
+	reader: LibraryReader,
+	origin: Extract<AnkiOrigin, { kind: "library" }>,
+): AnkiMaterial | AnkiFailure {
+	if (!reader.hasBooks()) return fail(404, "not_found", "The library has no searchable books yet.");
+	const result = reader.read(origin.bookId, origin.pages);
+	if (!result.ok) return fail(400, "bad_request", result.error);
+	if (result.pages.length > MAX_LIBRARY_PAGES) {
+		return fail(400, "too_big", `That is ${result.pages.length} pages. Choose at most ${MAX_LIBRARY_PAGES} at a time.`);
+	}
+	const blocks: string[] = [];
+	for (const { page, chunks } of result.pages) {
+		if (chunks.length === 0) continue;
+		const lines = [`--- ${citationFor(result.book, page)} ---`];
+		const section = chunks[0]!.section;
+		if (section && result.book.kind === "pdf") lines.push(`Section: ${section}`);
+		lines.push(chunks.map((c) => c.text).join("\n"));
+		for (const c of chunks) {
+			const marks = marksNotice(c.marks);
+			if (marks) lines.push(marks);
+			if (c.visionText) lines.push(VISION_NOTICE);
+		}
+		blocks.push(lines.join("\n"));
+	}
+	return {
+		title: `${result.book.title} (${origin.pages})`,
+		text: blocks.join("\n\n"),
+		sessionIds: [],
+		extraTools: libraryTools({ reader }),
+	};
+}
+
 // ─── the service ────────────────────────────────────────────────────────────
 
 export function createAnkiService(deps: AnkiServiceDeps) {
@@ -161,9 +207,7 @@ export function createAnkiService(deps: AnkiServiceDeps) {
 			return { title: record.title, text, sessionIds: [origin.chatId] };
 		}
 		if (origin.kind === "nodes") return nodesMaterial(deps.graphStore, origin.nodeIds);
-		if (!deps.resolveLibrary) {
-			return fail(501, "library_not_wired", "Making cards from a library section isn't available yet.");
-		}
+		if (!deps.resolveLibrary) return fail(501, "library_unavailable", "Making cards from a library section isn't available here.");
 		return deps.resolveLibrary(origin);
 	}
 
@@ -183,7 +227,11 @@ export function createAnkiService(deps: AnkiServiceDeps) {
 			return { kind: "nodes", nodeIds };
 		}
 		if (o.kind === "library") {
-			return typeof o.ref === "string" && o.ref !== "" ? { kind: "library", ref: o.ref } : bad("origin.ref is required.");
+			if (typeof o.bookId !== "string" || o.bookId.trim() === "") return bad("origin.bookId is required.");
+			if (typeof o.pages !== "string" || o.pages.trim() === "" || o.pages.length > 100) {
+				return bad("origin.pages is required, e.g. \"12-20\".");
+			}
+			return { kind: "library", bookId: o.bookId.trim(), pages: o.pages.trim() };
 		}
 		return bad("origin.kind must be session, nodes or library.");
 	}
@@ -369,8 +417,7 @@ export function createAnkiService(deps: AnkiServiceDeps) {
 	return { start, get, list, saveCards, discard, stop, push };
 }
 
-/** The wired service the routes use. The library seam (`resolveLibrary`) is
- *  deliberately unset until `med-library` merges. */
+/** The wired service the routes use. */
 export const anki = createAnkiService({
 	drafts: ankiDraftStore,
 	chatStore: stores.chatStore,
@@ -380,4 +427,5 @@ export const anki = createAnkiService({
 		return spec ? piEngineForSpec(spec) : undefined;
 	},
 	providerKeyMissing: (provider) => !providerKeyPresent(provider),
+	resolveLibrary: (origin) => libraryMaterial(library.reader, origin),
 });

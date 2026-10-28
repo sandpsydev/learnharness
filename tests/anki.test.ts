@@ -14,6 +14,8 @@ import * as path from "node:path";
 import { after, describe, it } from "node:test";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseStep, type ToolCall } from "@earendil-works/pi-ai";
 import type { PiEngine } from "../src/agent/models.ts";
+import type { LibraryReader } from "../src/agent/library/searcher.ts";
+import type { LibraryBook, LibraryChunk } from "../src/core/contracts.ts";
 import { chunkMaterial, dedupeByFront, runAnkiMaker } from "../src/agent/subagents/anki-maker.ts";
 import {
 	AnkiConnectError,
@@ -33,6 +35,7 @@ import {
 	originKeyOf,
 	sanitizeCard,
 	tagSlug,
+	tocSectionPages,
 	toAnkiHtml,
 	type AnkiCard,
 	type AnkiDraft,
@@ -46,7 +49,7 @@ import type { AnkiDraftStore } from "../src/store/anki.ts";
 // ── the data seam, BEFORE any config-loading import: nothing here may touch the real data dir ──
 const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-anki-"));
 process.env.LH_DATA_DIR = TMP_DATA;
-const { createAnkiService } = await import("../src/server/anki.ts");
+const { createAnkiService, libraryMaterial, MAX_LIBRARY_PAGES } = await import("../src/server/anki.ts");
 const { createAnkiDraftStore } = await import("../src/store/anki.ts");
 after(() => fs.rmSync(TMP_DATA, { recursive: true, force: true }));
 
@@ -358,10 +361,102 @@ describe("card maker", () => {
 
 describe("tutor prompt seam", () => {
 	it("tells the tutor the learner makes the cards, and that it must not claim an export", () => {
-		const text = fs.readFileSync(path.join(import.meta.dirname, "..", "src/agent/prompts/teacher/07-anki-export.md"), "utf-8");
+		const text = fs.readFileSync(path.join(import.meta.dirname, "..", "src/agent/prompts/teacher/08-anki-export.md"), "utf-8");
 		assert.match(text, /Make Anki cards…/);
 		assert.match(text, /Never say a card was created, drafted or sent/);
 		assert.match(text, /\[memorise\]/);
+	});
+});
+
+// ─── a fake library ─────────────────────────────────────────────────────────
+
+const BOOK: LibraryBook = {
+	id: "book_1",
+	kind: "pdf",
+	title: "Robbins Pathology",
+	fileName: "robbins.pdf",
+	pageCount: 900,
+	importedAt: "2026-10-01T00:00:00.000Z",
+	mode: "text",
+	status: "ready",
+	chunkCount: 3,
+	embeddings: null,
+	toc: [],
+	visionPages: [],
+};
+const chunk = (page: number, text: string, extra: Partial<LibraryChunk> = {}): LibraryChunk => ({ index: page, page, text, ...extra });
+
+function fakeReader(over: { pages?: Array<{ page: number; chunks: LibraryChunk[] }>; error?: string; book?: LibraryBook; hasBooks?: boolean } = {}): LibraryReader {
+	return {
+		hasBooks: () => over.hasBooks ?? true,
+		search: async () => ({ hits: [], notes: [] }) as never,
+		read: () =>
+			over.error
+				? { ok: false, error: over.error }
+				: {
+						ok: true,
+						book: over.book ?? BOOK,
+						pages: over.pages ?? [
+							{ page: 412, chunks: [chunk(412, "Distal tubule acidification fails in type 1 RTA.", { section: "Renal > Tubular disorders" })] },
+							{ page: 413, chunks: [chunk(413, "Type 2 RTA wastes bicarbonate.")] },
+						],
+					},
+	};
+}
+
+describe("library sections", () => {
+	it("builds material from pages under citation headers, with the library tools", () => {
+		const m = libraryMaterial(fakeReader(), { kind: "library", bookId: "book_1", pages: "412-413" });
+		assert.ok(!("ok" in m));
+		assert.equal(m.title, "Robbins Pathology (412-413)");
+		assert.match(m.text, /--- Robbins Pathology p\.412 ---\nSection: Renal > Tubular disorders\nDistal tubule/);
+		assert.match(m.text, /--- Robbins Pathology p\.413 ---/);
+		assert.deepEqual(Object.keys(m.extraTools!).sort(), ["library_read", "library_search"]);
+		assert.deepEqual(m.sessionIds, []);
+	});
+
+	it("cites a lecture note by slide and keeps its marks and image notices visible", () => {
+		const note: LibraryBook = { ...BOOK, kind: "slidescribe", title: "Acute abdomen" };
+		const m = libraryMaterial(
+			fakeReader({
+				book: note,
+				pages: [{ page: 7, chunks: [chunk(7, "Rebound tenderness.", { marks: { warning: true, aiRead: true }, visionText: true })] }],
+			}),
+			{ kind: "library", bookId: "book_1", pages: "7" },
+		);
+		assert.ok(!("ok" in m));
+		assert.match(m.text, /--- Acute abdomen, slide 7 ---/);
+		assert.match(m.text, /⚠ check mark, \(AI read — verify\)/);
+		assert.match(m.text, /AI-written image description/);
+	});
+
+	it("refuses honestly: no books, a bad page spec, too many pages; skips empty pages", () => {
+		const origin = { kind: "library", bookId: "book_1", pages: "1-5" } as const;
+		const none = libraryMaterial(fakeReader({ hasBooks: false }), origin);
+		assert.ok("ok" in none && none.status === 404);
+		const bad = libraryMaterial(fakeReader({ error: 'No book called "x".' }), origin);
+		assert.ok("ok" in bad && bad.status === 400 && /No book called/.test(bad.error));
+		const many = libraryMaterial(
+			fakeReader({ pages: Array.from({ length: MAX_LIBRARY_PAGES + 1 }, (_, i) => ({ page: i + 1, chunks: [chunk(i + 1, "x")] })) }),
+			origin,
+		);
+		assert.ok("ok" in many && many.status === 400 && many.code === "too_big");
+		const blank = libraryMaterial(fakeReader({ pages: [{ page: 1, chunks: [] }, { page: 2, chunks: [chunk(2, "Real text.")] }] }), origin);
+		assert.ok(!("ok" in blank));
+		assert.ok(!blank.text.includes("p.1 ---"));
+	});
+
+	it("turns an outline entry into its page range", () => {
+		const toc = [
+			{ title: "Renal", page: 400, depth: 0 },
+			{ title: "Tubular disorders", page: 410, depth: 1 },
+			{ title: "Glomerular disease", page: 420, depth: 1 },
+			{ title: "Cardiac", page: 450, depth: 0 },
+		];
+		assert.equal(tocSectionPages(toc, 0, 900), "400-449");
+		assert.equal(tocSectionPages(toc, 1, 900), "410-419");
+		assert.equal(tocSectionPages(toc, 3, 900), "450-900");
+		assert.equal(tocSectionPages(toc, 9, 900), "all");
 	});
 });
 
@@ -498,28 +593,59 @@ describe("Anki service", () => {
 		assert.equal(service.get(started.draft.id)!.cards.length, 1);
 	});
 
-	it("rejects bad input, and leaves the PDF library trigger as a clean seam", async () => {
+	it("rejects bad input and unknown sessions", async () => {
 		const { service } = harness();
-		for (const bad of [null, {}, { kind: "session" }, { kind: "nodes", nodeIds: [] }, { kind: "nodes", nodeIds: [1] }, { kind: "x" }]) {
+		const bads = [
+			null,
+			{},
+			{ kind: "session" },
+			{ kind: "nodes", nodeIds: [] },
+			{ kind: "nodes", nodeIds: [1] },
+			{ kind: "library", bookId: "b1" },
+			{ kind: "library", pages: "1-2" },
+			{ kind: "library", bookId: "b1", pages: "  " },
+			{ kind: "x" },
+		];
+		for (const bad of bads) {
 			const out = await service.start(bad);
 			assert.ok(!out.ok && out.status === 400, JSON.stringify(bad));
 		}
 		const unknownChat = await service.start({ kind: "session", chatId: "nope" });
 		assert.ok(!unknownChat.ok && unknownChat.status === 404);
-		const library = await service.start({ kind: "library", ref: "book:p1-5" });
-		assert.ok(!library.ok);
-		assert.equal(library.status, 501);
-		assert.equal(library.code, "library_not_wired");
 	});
 
-	it("uses a library resolver once one is wired in", async () => {
-		const { service, prompt } = harness({
-			resolveLibrary: async (o: { ref: string }) => ({ title: `Lib ${o.ref}`, text: "Book text about nephrons.", sessionIds: [] }),
+	it("answers 501 for a library section when no library is wired", async () => {
+		const { service } = harness();
+		const out = await service.start({ kind: "library", bookId: "b1", pages: "1-5" });
+		assert.ok(!out.ok);
+		assert.equal(out.status, 501);
+	});
+
+	it("drafts from a library section: pages under their citations, with the library tools in the agent's hands", async () => {
+		let seen = "";
+		const reader = fakeReader();
+		const { service } = harness({
+			resolveLibrary: (o: any) => libraryMaterial(reader, o),
+			engine: fauxEngine([
+				(context: any) => {
+					seen = JSON.stringify([context.messages, (context.tools ?? []).map((t: { name: string }) => t.name)]);
+					return fauxAssistantMessage(
+						[fauxToolCall("submit_cards", { cards: [] } as ToolCall["arguments"], { id: "c" })],
+						{ stopReason: "toolUse" },
+					);
+				},
+			]),
 		});
-		const started = await service.start({ kind: "library", ref: "book:p1-5" });
+		const started = await service.start({ kind: "library", bookId: "book_1", pages: "412-413" });
 		assert.ok(started.ok);
+		assert.equal(started.draft.originKey, "library:book_1:412-413");
+		assert.deepEqual(started.draft.sessionIds, []);
 		await settled(service, started.draft.id);
-		assert.match(prompt(), /Book text about nephrons/);
+		assert.match(seen, /--- Robbins Pathology p\.412 ---/);
+		assert.match(seen, /Distal tubule acidification fails/);
+		assert.match(seen, /library_search/);
+		assert.match(seen, /library_read/);
+		assert.match(seen, /--- Robbins Pathology p\.413 ---/);
 	});
 
 	it("refuses honestly with no model or no key, and writes no draft", async () => {

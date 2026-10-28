@@ -35,6 +35,8 @@ export { effectivePromptSegments, allSegmentPaths, readPromptOverride } from "..
 // keeps its plain process.env reads (that seam is the point).
 export * from "./keys.ts";
 export * from "./search.ts";
+export * from "./verify.ts";
+export * from "./verify-api.ts";
 export { authStore } from "../store/auth.ts";
 export * from "./settings-body.ts";
 export * from "./turn-liveness.ts";

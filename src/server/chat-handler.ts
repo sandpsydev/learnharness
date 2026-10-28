@@ -31,7 +31,8 @@ import { runPiTurn } from "./pi/ui-stream.ts";
 import { collectToolCallIds } from "./pi/call-ids.ts";
 import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
-import { searchAvailable, searchProvider } from "./search.ts";
+import { searchAvailable, searchProvider, searchStatus } from "./search.ts";
+import { extensionLastSeen } from "./verify.ts";
 import { providerKeyPresent } from "./keys.ts";
 import { library } from "./library.ts";
 import {
@@ -485,6 +486,9 @@ export async function handleChatInput(
 						// = no research tool in the teacher's registry.
 						searchAvailable,
 						...libraryTools,
+						// Evidence routing (medical fork): the Expert AI queue + the
+						// honest source report.
+						verify: { verifyStore: stores.verifyStore, searchStatus, extensionLastSeen },
 					},
 					agentOpts,
 				)

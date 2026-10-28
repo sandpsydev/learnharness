@@ -45,6 +45,12 @@ Evaluation — what to keep vs drop:
 - Sources that directly address the question outweigh tangentially related ones.
 - Drop SEO filler, outdated info, and beginner tutorials (unless that's the audience).
 
+Clinical questions (guideline wording, thresholds, dosing tables, recent changes): prefer OPEN guideline
+publishers — NICE, ESC, AHA/ACC, IDSA, KDIGO, GOLD, GINA, WHO and national or Thai specialty societies —
+over summaries, blogs or paywalled pages. Quote the exact wording and numbers you find, name the guideline
+and its year with each, and say when two guidelines disagree. Never fill a missing number from memory: if
+no source states it, say it is unverified.
+
 Tool outputs may be error strings (e.g. search unconfigured, a page that failed to fetch).
 Adapt: try another URL or another search angle; if research is genuinely impossible, say so
 in the brief instead of inventing facts.

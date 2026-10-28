@@ -27,6 +27,9 @@ import type {
 	NotesSource,
 	LibraryBook,
 	LibraryChunk,
+	VerifyHighlight,
+	VerifyItem,
+	VerifyStatus,
 } from "./contracts.ts";
 import type { UserSettings } from "./settings.ts";
 
@@ -160,6 +163,34 @@ export interface JobStore {
 	 *  route refuses while jobs are still running, so by the time this
 	 *  fires every record is terminal. */
 	deleteJobsForChat(chatId: string): number;
+}
+
+// ─── VerifyStore — the Expert AI question queue + highlights (data/verify) ────
+
+export interface NewVerifyItem {
+	prompt: string;
+	provisionalClaim?: string;
+}
+
+/** Mergeable fields — identity (id, chatId, createdAt) is immutable. */
+export type VerifyItemPatch = Partial<Omit<VerifyItem, "id" | "chatId" | "createdAt">>;
+
+export interface VerifyStore {
+	/** Queue questions for a chat. A prompt already queued/asked in the same
+	 *  chat is returned as-is instead of duplicated (idempotent re-adds). */
+	addItems(chatId: string, inits: readonly NewVerifyItem[]): VerifyItem[];
+	getItem(id: string): VerifyItem | null;
+	/** Oldest first. Filters are ANDed; absent = no filter. */
+	listItems(filter?: { chatId?: string; status?: readonly VerifyStatus[] }): VerifyItem[];
+	/** Merge a patch; null if unknown id. */
+	updateItem(id: string, patch: VerifyItemPatch): VerifyItem | null;
+	/** Save a highlight the learner sent (id and receivedAt are minted here). */
+	addHighlight(h: Omit<VerifyHighlight, "id" | "receivedAt"> & { receivedAt?: string }): VerifyHighlight;
+	getHighlight(id: string): VerifyHighlight | null;
+	updateHighlight(id: string, patch: Partial<Omit<VerifyHighlight, "id">>): VerifyHighlight | null;
+	/** Drop every queue item and highlight of a chat (session deletion).
+	 *  Returns how many records were removed. */
+	deleteForChat(chatId: string): number;
 }
 
 // ─── SettingsStore — THE user settings record (settings-storage wave, 2026-09-19) ──

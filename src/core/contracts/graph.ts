@@ -123,6 +123,100 @@ export interface NamingRunStats {
 export const CURRENT_GRAPH_FORMAT_VERSION = 1;
 
 
+// ─── Medical tags (docs/medical-spec.md Phase 4) ────────────────────────────
+//
+// Two OPTIONAL fields on every node: the organ system(s) it belongs to and
+// its fact type. The two value lists live HERE, once — the extractor schema,
+// the tagger, the detail card and the filter chips all read them, and the
+// Anki export (a later task) maps each system id to its deck from this same
+// list. Stored values are the stable `id` slugs; `label` is display only.
+
+/** The 13 organ systems (spec Phase 4). A node carries one or more. */
+export const ORGAN_SYSTEMS = [
+	{ id: "cardiovascular", label: "Cardiovascular" },
+	{ id: "respiratory", label: "Respiratory" },
+	{ id: "renal", label: "Renal/Urinary" },
+	{ id: "gi", label: "GI/Hepatobiliary" },
+	{ id: "endocrine", label: "Endocrine" },
+	{ id: "reproductive", label: "Reproductive/Obstetrics" },
+	{ id: "neurology", label: "Neurology" },
+	{ id: "psychiatry", label: "Psychiatry" },
+	{ id: "musculoskeletal", label: "Musculoskeletal" },
+	{ id: "dermatology", label: "Dermatology" },
+	{ id: "haem-onc", label: "Haematology/Oncology" },
+	{ id: "id-immunology", label: "Infectious disease/Immunology" },
+	{ id: "general", label: "General principles" },
+] as const;
+
+/** The 5 fact types (spec Phase 4). A node carries exactly one. */
+export const FACT_TYPES = [
+	{ id: "mechanism", label: "Mechanism" },
+	{ id: "clinical-feature", label: "Clinical feature" },
+	{ id: "diagnosis", label: "Diagnosis/investigation" },
+	{ id: "management", label: "Management" },
+	{ id: "memorise", label: "Memorise" },
+] as const;
+
+export type OrganSystem = (typeof ORGAN_SYSTEMS)[number]["id"];
+export type FactType = (typeof FACT_TYPES)[number]["id"];
+
+/** The tag fields a node (or a node line) may carry. */
+export interface GraphNodeTags {
+	systems?: OrganSystem[];
+	factType?: FactType;
+}
+
+const SYSTEM_IDS: ReadonlySet<string> = new Set(ORGAN_SYSTEMS.map((s) => s.id));
+const FACT_TYPE_IDS: ReadonlySet<string> = new Set(FACT_TYPES.map((t) => t.id));
+
+/** Tolerant lookup for model output: an id or a label, any case, with
+ *  spaces/underscores/slashes treated alike ("GI/Hepatobiliary" → "gi",
+ *  "Clinical Feature" → "clinical-feature"). Undefined when it names nothing. */
+function lookupTag<T extends string>(
+	list: ReadonlyArray<{ id: T; label: string }>,
+	raw: unknown,
+): T | undefined {
+	if (typeof raw !== "string") return undefined;
+	const norm = (v: string) => v.trim().toLowerCase().replace(/[\s_/]+/g, "-");
+	const wanted = norm(raw);
+	if (wanted === "") return undefined;
+	return list.find((entry) => entry.id === wanted || norm(entry.label) === wanted)?.id;
+}
+
+/** Clean a raw systems value: known ids only, deduped, in list order. Never
+ *  throws — unknown values (a stale or hand-edited ledger line, a model
+ *  typo) are dropped, so a bad tag can never make a node unreadable. */
+export function sanitizeSystems(raw: unknown): OrganSystem[] {
+	if (!Array.isArray(raw)) return [];
+	const found = new Set<string>();
+	for (const item of raw) {
+		const id = lookupTag(ORGAN_SYSTEMS, item);
+		if (id !== undefined) found.add(id);
+	}
+	return ORGAN_SYSTEMS.map((s) => s.id).filter((id) => found.has(id));
+}
+
+/** Clean a raw fact-type value: a known id, or undefined. */
+export function sanitizeFactType(raw: unknown): FactType | undefined {
+	return lookupTag(FACT_TYPES, raw);
+}
+
+export const isOrganSystem = (v: unknown): v is OrganSystem => typeof v === "string" && SYSTEM_IDS.has(v);
+export const isFactType = (v: unknown): v is FactType => typeof v === "string" && FACT_TYPE_IDS.has(v);
+
+export function organSystemLabel(id: OrganSystem): string {
+	return ORGAN_SYSTEMS.find((s) => s.id === id)?.label ?? id;
+}
+
+export function factTypeLabel(id: FactType): string {
+	return FACT_TYPES.find((t) => t.id === id)?.label ?? id;
+}
+
+/** True when a node is missing either tag — the back-fill's work list. */
+export function isUntagged(node: GraphNodeTags): boolean {
+	return (node.systems?.length ?? 0) === 0 || node.factType === undefined;
+}
+
 export interface GraphNode {
 	/** Opaque stable id, store-assigned: "n_" + nanoid-like. */
 	id: string;
@@ -144,6 +238,19 @@ export interface GraphNode {
 	createdAt: string;
 	/** Every (chat, message) point where this proposition came up. */
 	provenance: ProvenancePoint[];
+	/** OPTIONAL organ system(s) — one or more of ORGAN_SYSTEMS. Absent on
+	 *  every node stored before the medical fork: those stay valid. FIRST
+	 *  ASSIGNMENT STICKS, like `name` (see getGraph): a later link-append
+	 *  line only fills a missing tag, never replaces one. */
+	systems?: OrganSystem[];
+	/** OPTIONAL fact type — exactly one of FACT_TYPES. Same sticking rule. */
+	factType?: FactType;
+	/** Stored on a node LINE only (never on the merged node): marks a line
+	 *  as the learner's edit from the detail card. The latest such line
+	 *  OVERRIDES the tags (and an empty/absent value clears it); extraction
+	 *  and back-fill lines never override it. Edits are appended, so no
+	 *  existing ledger line is ever rewritten. */
+	tagsEdited?: boolean;
 }
 
 /** sessions.jsonl line — the emission checkpoint for one chat (which chats
@@ -243,6 +350,11 @@ export interface ExtractedProposition {
 	 *  undefined → messageId "" (chat-level), so NO persisted shape or
 	 *  format version changes (GraphNode / ProvenancePoint untouched). */
 	messageId?: string;
+	/** OPTIONAL organ system(s) the extractor assigned (ORGAN_SYSTEMS ids).
+	 *  The merger stamps them on the node line; first assignment sticks. */
+	systems?: OrganSystem[];
+	/** OPTIONAL fact type the extractor assigned (FACT_TYPES id). */
+	factType?: FactType;
 }
 
 /** One proposed argument (extractor redesign, 2026-09-30). Endpoints are

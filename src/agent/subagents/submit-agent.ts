@@ -29,10 +29,10 @@ import { healEncodedArguments } from "../../core/argument-heal.ts";
 // weak-model wire behavior, don't punish it with a retry). Best-effort:
 // heal only a string that parses to an array; anything else passes
 // through untouched and fails validation exactly as before.
-export function healStringifiedArrays(raw: unknown): unknown {
+export function healStringifiedArrays(raw: unknown, keys: readonly string[] = ["propositions", "chains"]): unknown {
 	if (typeof raw !== "object" || raw === null) return raw;
 	const out: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
-	for (const key of ["propositions", "chains"]) {
+	for (const key of keys) {
 		const v = out[key];
 		if (typeof v !== "string" || v.trim().length === 0) continue;
 		try {

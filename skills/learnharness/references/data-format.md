@@ -184,6 +184,14 @@ Each line contains `id`, `name`, `statement`, `aliases`, `createdAt`, and
   deduplication. Later names do not replace the name or become aliases.
 - Provenance unions by exact `(chatId, messageId)` pair, retaining encounter order.
 - Do not deduplicate different node IDs just because their labels look alike.
+- Optional medical tags: `systems` (one or more organ-system ids such as `renal`,
+  `cardiovascular`) and `factType` (one of `mechanism`, `clinical-feature`,
+  `diagnosis`, `management`, `memorise`). Older nodes have neither. The first line
+  that carries a tag defines it; a later line only fills a tag still missing. A line
+  with `"tagsEdited": true` is the learner's edit: the latest one replaces both tags
+  and extraction lines no longer fill over it. Such edit lines have an empty `name`
+  and `statement` and no provenance, so they add no alias; never treat them as a
+  new node or let their empty `name` replace the real one.
 
 ### Reasoning chains (`chains.jsonl`)
 

@@ -15,15 +15,20 @@ import {
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 import { withBgLlmSlot } from "./bg-llm-semaphore.ts";
-import type {
-	AuditVerdicts,
-	CallUsage,
-	ChatRecord,
-	ExtractionRunUsage,
-	ExtractionStageUsage,
-	SessionFindings,
+import {
+	FACT_TYPES,
+	isUntagged,
+	ORGAN_SYSTEMS,
+	sanitizeFactType,
+	sanitizeSystems,
+	type AuditVerdicts,
+	type CallUsage,
+	type ChatRecord,
+	type ExtractionRunUsage,
+	type ExtractionStageUsage,
+	type SessionFindings,
 } from "../../core/contracts.ts";
-import { getGraph, mergeFindings, type DerivedGraph, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
+import { fillNodeTags, getGraph, mergeFindings, type DerivedGraph, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
 import type { GraphStore } from "../../core/ports.ts";
 import { emit } from "../../core/events.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
@@ -31,6 +36,7 @@ import { batchRuns, coverageOf, messageViewLines } from "../../core/coverage.ts"
 import { failedOutputCallIds, type LhMessage } from "../../core/native-messages.ts";
 import { auditorGraphTools } from "../tools/graph.ts";
 import { runSubmitAgent, healStringifiedArrays } from "./submit-agent.ts";
+import { runTagger, TAG_BATCH_SIZE } from "./tagger.ts";
 
 /**
  * The extraction pipeline (vision §1 construction, 2026-09-02 redesign;
@@ -144,6 +150,22 @@ function proseView(
 
 // ─── the extractor ──────────────────────────────────────────────────────────
 
+// MEDICAL TAGS (docs/medical-spec.md Phase 4): two OPTIONAL fields on every
+// proposition. Deliberately plain strings (the allowed values ride the
+// description, built from the ONE shared list in contracts/graph.ts): a
+// model's near-miss ("Renal/Urinary", "Clinical feature") is mapped to an id
+// by sanitizeSystems/sanitizeFactType at the fill seam, and an unknown value
+// is dropped there — a tag typo never burns a retry or fails a submit.
+const systemsDescription =
+	"OPTIONAL organ system(s) this idea belongs to — one or more of: " +
+	ORGAN_SYSTEMS.map((s) => `"${s.id}" (${s.label})`).join(", ") +
+	'. A fact spanning systems carries several (diabetic nephropathy → ["endocrine", "renal"]). ' +
+	'Use "general" for pharmacology, biochemistry, genetics and biostatistics principles. Omit for non-medical material.';
+const factTypeDescription =
+	"OPTIONAL fact type — exactly one of: " +
+	FACT_TYPES.map((t) => `"${t.id}" (${t.label})`).join(", ") +
+	". Omit for non-medical material.";
+
 const propositionProps = {
 	id: Type.String({ description: 'Local id: "p1", "p2", … — referenced by chains in this call.' }),
 	name: Type.String({
@@ -163,6 +185,8 @@ const propositionProps = {
 			description: "Verbatim phrasings the source used for the same proposition, if any.",
 		}),
 	),
+	systems: Type.Optional(Type.Array(Type.String(), { description: systemsDescription })),
+	factType: Type.Optional(Type.String({ description: factTypeDescription })),
 };
 
 // The extractor redesign (owner, 2026-09-30): the extractor submits
@@ -277,12 +301,26 @@ type NotesAuditResult = AuditVerdicts;
 // a pile of nodes with no structure). Only the per-item aliases stay
 // optional with a ??-fill.
 
+/** The tag fill (medical fork): map the model's free strings onto the shared
+ *  value lists, dropping anything unknown. Only known values survive, so a
+ *  proposition never carries empty `systems: []` / `factType: undefined`. */
+function fillTags<P extends object>(p: P & { systems?: unknown; factType?: unknown }): P {
+	const { systems: rawSystems, factType: rawFactType, ...rest } = p;
+	const systems = sanitizeSystems(rawSystems);
+	const factType = sanitizeFactType(rawFactType);
+	return {
+		...rest,
+		...(systems.length > 0 ? { systems } : {}),
+		...(factType !== undefined ? { factType } : {}),
+	} as P;
+}
+
 function fillFindings<T extends { propositions: Array<{ aliases?: string[] }>; chains: unknown }>(
 	raw: T,
 ): T {
 	return {
 		...raw,
-		propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
+		propositions: raw.propositions.map((p) => fillTags({ ...p, aliases: p.aliases ?? [] })),
 	};
 }
 
@@ -355,11 +393,20 @@ function validateSessionAnchors(value: SessionFindingsSubmit, batchIds: Readonly
  *  anchor, 2026-10-13 — both doors lift through here). */
 const asSessionFindings = (
 	raw: {
-		propositions: Array<{ id: string; name: string; statement: string; aliases?: string[]; messageId?: string }>;
+		propositions: Array<{
+			id: string;
+			name: string;
+			statement: string;
+			aliases?: string[];
+			messageId?: string;
+			systems?: string[];
+			factType?: string;
+		}>;
 		chains: Array<{ premises: string[]; conclusion: string }>;
 	},
 ): SessionFindings => ({
-	propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
+	// The tag strings are already sanitized by the fill; re-typing them here.
+	propositions: raw.propositions.map((p) => ({ ...fillTags<Omit<typeof p, "systems" | "factType">>(p), aliases: p.aliases ?? [] }) as SessionFindings["propositions"][number]),
 	chains: raw.chains,
 });
 
@@ -430,7 +477,9 @@ submission OR existing ids from THE GRAPH SO FAR, verbatim. Premises within one 
 TOGETHER — independent arguments for the same conclusion are separate chains. A conclusion may
 reappear, by id, as a premise of later chains. A bare idea that no argument uses rides the
 propositions list alone. Include every field even when empty — "chains": [] when the source makes no
-arguments. The tool's field descriptions carry the details.`;
+arguments. When the material is medical, also tag each NEW idea with its organ system(s) and its fact
+type (the optional systems and factType fields); an idea the graph already holds keeps its existing tags,
+so tag only the ideas you submit. The tool's field descriptions carry the details.`;
 
 export const EXTRACTOR_INSTRUCTIONS = `${SESSION_PREAMBLE}\n\n${EXTRACTION_CORE}\n\n${SESSION_MESSAGE_ID_RULE}`;
 export const NOTES_EXTRACTOR_INSTRUCTIONS = `${NOTES_PREAMBLE}\n\n${EXTRACTION_CORE}`;
@@ -760,6 +809,17 @@ export class NotesImportError extends Error {
 	}
 }
 
+/** What one "tag existing nodes" back-fill did. */
+export interface TagBackfillStats {
+	/** Nodes that lacked a tag when the run started. */
+	untagged: number;
+	/** Nodes that gained at least one tag. */
+	tagged: number;
+}
+
+/** The back-fill's single-flight key in the shared in-flight set. */
+const TAG_BACKFILL_KEY = "__tag-backfill__";
+
 export interface ExtractionPipeline {
 	/** Extract + audit + merge ONE chat. Single-flight per chat; resolves to
 	 *  the merger's append stats (or throws — no checkpoint on failure). */
@@ -769,6 +829,11 @@ export interface ExtractionPipeline {
 	 *  path, so re-importing the same file re-runs extraction against the
 	 *  same source identity (mappings dedupe by it). */
 	importNotes(input: NotesImportInput): Promise<EmissionStats>;
+	/** The one-off "tag existing nodes" back-fill (medical fork, Phase 4):
+	 *  ask the model for the organ system(s) and fact type of every node
+	 *  that lacks one, and APPEND the answers (only missing tags are filled;
+	 *  nothing existing is rewritten). Single-flight; resolves to what it did. */
+	tagExistingNodes(signal?: AbortSignal): Promise<TagBackfillStats>;
 }
 
 /** pi's per-step usage, flattened to the persisted CallUsage fields
@@ -1434,6 +1499,41 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		}
 	}
 
-	return { runExtraction, importNotes };
+	async function tagExistingNodes(signal?: AbortSignal): Promise<TagBackfillStats> {
+		const engine = stageEngine("extractor", deps.extractor);
+		if (!engine) {
+			console.info("[extraction] tag back-fill refused — no model configured for the extractor slot");
+			throw new ModelsNotConfiguredError([ROLE_SLOT.extractor]);
+		}
+		const keyRefusal = deps.providerKeyMissing?.(engine.model.provider, ROLE_SLOT.extractor);
+		if (keyRefusal) throw new ProviderKeyMissingError(keyRefusal.provider, keyRefusal.slots);
+		if (inFlight.has(TAG_BACKFILL_KEY)) throw new Error("Tagging is already running.");
+		inFlight.add(TAG_BACKFILL_KEY);
+		try {
+			const todo = getGraph(graphStore).nodes.filter(isUntagged);
+			const stats: TagBackfillStats = { untagged: todo.length, tagged: 0 };
+			for (let i = 0; i < todo.length; i += TAG_BATCH_SIZE) {
+				signal?.throwIfAborted();
+				// A batch that fails stops the run with what already landed kept
+				// (each batch is appended as soon as it returns); running it
+				// again only picks up the nodes still untagged.
+				const proposals = await withBgLlmSlot(signal, () =>
+					runTagger({
+						engine,
+						nodes: todo.slice(i, i + TAG_BATCH_SIZE),
+						signal,
+						onStep: (_usage, _model, step, finishReason, tools) =>
+							console.info(`[extraction] tagger step ${step}: ${finishReason}, tools: ${tools}`),
+					}),
+				);
+				stats.tagged += fillNodeTags(graphStore, proposals);
+			}
+			return stats;
+		} finally {
+			inFlight.delete(TAG_BACKFILL_KEY);
+		}
+	}
+
+	return { runExtraction, importNotes, tagExistingNodes };
 }
 

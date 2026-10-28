@@ -1,4 +1,4 @@
-import { deleteGraphNode } from "@/src/server";
+import { deleteGraphNode, editGraphNodeTags } from "@/src/server";
 
 /**
  * DELETE /api/graph/nodes/[id] — single-node deletion, FULL DEATH (owner
@@ -24,4 +24,26 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
 		return Response.json({ error: outcome.error, code: outcome.code }, { status: outcome.status });
 	}
 	return Response.json({ stats: outcome.stats, graphRevision: outcome.graphRevision });
+}
+
+/**
+ * PATCH /api/graph/nodes/[id] — the learner's edit of a node's medical tags
+ * (docs/medical-spec.md Phase 4): body `{ systems: string[], factType: string | null }`
+ * REPLACES both tags. The edit is appended to the ledger, never rewritten in
+ * (server/graph.ts editGraphNodeTags); the response carries the new tags
+ * plus the new graphRevision (the refetch signal).
+ */
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+	const { id } = await params;
+	let body: unknown;
+	try {
+		body = await req.json();
+	} catch {
+		return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+	}
+	const outcome = editGraphNodeTags(id, body);
+	if (!outcome.ok) {
+		return Response.json({ error: outcome.error, code: outcome.code }, { status: outcome.status });
+	}
+	return Response.json({ tags: outcome.tags, graphRevision: outcome.graphRevision });
 }

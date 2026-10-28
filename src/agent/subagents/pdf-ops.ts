@@ -52,9 +52,9 @@ export function standardFontsDir(): string {
 	return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "node_modules", "pdfjs-dist", "standard_fonts") + "/";
 }
 
-async function openDocument(filePath: string) {
+async function openDocument(source: string | Uint8Array) {
 	const pdfjs = await loadPdfjs();
-	const data = new Uint8Array(await fs.readFile(filePath));
+	const data = typeof source === "string" ? new Uint8Array(await fs.readFile(source)) : new Uint8Array(source);
 	// The legacy build in plain node runs on a main-thread fake worker (no
 	// workerSrc needed); teardown is the loading task's destroy().
 	// verbosity 0 = errors only — scanned PDFs (JBIG2 XObjects) otherwise
@@ -236,4 +236,141 @@ export function renderDir(filePath: string): string {
 		h = Math.imul(h, 0x01000193) >>> 0;
 	}
 	return path.join("/tmp", `lh-pdf-${h.toString(16).padStart(8, "0")}`);
+}
+
+// ─── Library indexing (medical fork, Phase 6) ───────────────────────────────
+//
+// The PDF library reads whole books through the same pdfjs plumbing: ONE
+// document open, line-aware page text (itemsToText above glues a page into a
+// single line — fine for pdf_search's regexes, poor for chunking and for
+// keyword ranking), the per-page image count for the vision-pass triage, and
+// the outline (bookmarks) the PDF carries.
+
+/** Page count from raw bytes — the importer's validity gate before it copies
+ *  anything. pdfjs throws its precise error for a file that isn't a PDF. */
+export async function pdfPageCountOf(bytes: Uint8Array): Promise<number> {
+	const { doc, task } = await openDocument(bytes);
+	try {
+		return doc.numPages;
+	} finally {
+		await task.destroy();
+	}
+}
+
+/** Text items → lines: a new line on pdfjs's end-of-line flag or a vertical
+ *  jump, a space where two runs sit apart on the same line. */
+export function itemsToLines(items: unknown[]): string {
+	let out = "";
+	let prevY: number | null = null;
+	let prevEnd: number | null = null;
+	for (const it of items) {
+		if (!it || typeof it !== "object" || typeof (it as { str?: unknown }).str !== "string") continue;
+		const item = it as { str: string; hasEOL?: boolean; transform?: number[]; width?: number; height?: number };
+		const x = item.transform?.[4];
+		const y = item.transform?.[5];
+		const h = item.height || 0;
+		if (out && prevY !== null && typeof y === "number" && Math.abs(y - prevY) > Math.max(h * 0.5, 1)) {
+			if (!out.endsWith("\n")) out += "\n";
+		} else if (out && typeof x === "number" && prevEnd !== null && x - prevEnd > Math.max(h * 0.15, 0.5)) {
+			if (!/\s$/.test(out) && !/^\s/.test(item.str)) out += " ";
+		}
+		out += item.str;
+		if (typeof y === "number") prevY = y;
+		prevEnd = typeof x === "number" && typeof item.width === "number" ? x + item.width : null;
+		if (item.hasEOL && !out.endsWith("\n")) out += "\n";
+	}
+	return out;
+}
+
+export interface PdfPageContent {
+	page: number;
+	text: string;
+	/** Painted images on the page (0 unless `images: true` was asked for). */
+	imageCount: number;
+}
+
+export interface PdfOutlineEntry {
+	title: string;
+	page: number;
+	depth: number;
+}
+
+export interface PdfBookRead {
+	pageCount: number;
+	pages: PdfPageContent[];
+	outline: PdfOutlineEntry[];
+}
+
+interface OutlineNode {
+	title?: string;
+	dest?: unknown;
+	items?: OutlineNode[];
+}
+
+/** Flatten the outline tree in reading order, resolving each destination to a
+ *  1-based page. Unresolvable entries are dropped, never guessed. */
+async function readOutline(doc: Awaited<ReturnType<typeof openDocument>>["doc"]): Promise<PdfOutlineEntry[]> {
+	const entries: PdfOutlineEntry[] = [];
+	let root: OutlineNode[] | null;
+	try {
+		root = (await doc.getOutline()) as OutlineNode[] | null;
+	} catch {
+		return [];
+	}
+	if (!root) return [];
+	const walk = async (nodes: OutlineNode[], depth: number): Promise<void> => {
+		for (const node of nodes) {
+			if (entries.length >= 2000) return;
+			try {
+				let dest = node.dest;
+				if (typeof dest === "string") dest = await doc.getDestination(dest);
+				if (Array.isArray(dest) && dest[0] !== undefined && dest[0] !== null) {
+					const ref = dest[0];
+					const index = typeof ref === "number" ? ref : await doc.getPageIndex(ref as never);
+					const title = (node.title ?? "").replace(/\s+/g, " ").trim();
+					if (title && Number.isInteger(index) && index >= 0 && index < doc.numPages) {
+						entries.push({ title, page: index + 1, depth });
+					}
+				}
+			} catch {
+				/* a dangling destination: skip the entry */
+			}
+			if (node.items?.length) await walk(node.items, depth + 1);
+		}
+	};
+	await walk(root, 0);
+	return entries;
+}
+
+/** Read every page's text (and optionally image counts) plus the outline.
+ *  `onPage` fires after each page; `signal` aborts between pages. */
+export async function readPdfBook(
+	filePath: string,
+	opts: { images?: boolean; onPage?: (page: number, total: number) => void; signal?: AbortSignal } = {},
+): Promise<PdfBookRead> {
+	const pdfjs = opts.images ? await loadPdfjs() : null;
+	const { doc, task } = await openDocument(filePath);
+	try {
+		const pages: PdfPageContent[] = [];
+		for (let i = 1; i <= doc.numPages; i++) {
+			if (opts.signal?.aborted) {
+				const err = new Error("aborted");
+				err.name = "AbortError";
+				throw err;
+			}
+			const page = await doc.getPage(i);
+			const content = await page.getTextContent();
+			let imageCount = 0;
+			if (pdfjs) {
+				const ops = await page.getOperatorList();
+				for (const fn of ops.fnArray) if (fn === pdfjs.OPS.paintImageXObject) imageCount++;
+			}
+			pages.push({ page: i, text: itemsToLines(content.items as unknown[]), imageCount });
+			page.cleanup();
+			opts.onPage?.(i, doc.numPages);
+		}
+		return { pageCount: doc.numPages, pages, outline: await readOutline(doc) };
+	} finally {
+		await task.destroy();
+	}
 }

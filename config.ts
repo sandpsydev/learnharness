@@ -26,6 +26,11 @@ export const PATHS = {
 	/** Chat sessions (AI SDK UIMessage transcripts, one JSON file per chat). */
 	chats: path.join(DATA_ROOT, "chats"),
 	graph: path.join(DATA_ROOT, "graph"),
+	/** The PDF library (medical fork, Phase 6): one directory per book —
+	 *  the copied PDF, its chunks, its vectors. */
+	library: path.join(DATA_ROOT, "library"),
+	/** Local embedding model files (downloaded once, then offline). */
+	models: path.join(DATA_ROOT, "models"),
 	/** Debug artifacts (env-gated): data/debug/provider-events/<chatId>.jsonl
 	 * raw provider stream recordings (src/agent/provider-events.ts). */
 	debug: path.join(DATA_ROOT, "debug"),

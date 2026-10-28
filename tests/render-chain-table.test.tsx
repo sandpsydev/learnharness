@@ -291,6 +291,10 @@ describe("ChainTableBody — the floating selection bar (never shifts layout)", 
 		assert.match(btn, /aria-label="Make Anki cards from 2 selected nodes"/);
 		assert.ok(html.indexOf('data-testid="chain-anki"') < html.indexOf('chain-danger-divider"'));
 		assert.ok(!render().includes('data-testid="chain-anki"'), "no selection, no action");
+		assert.ok(
+			!render({ selection: new Set(["a"]), onAnki: undefined }).includes('data-testid="chain-anki"'),
+			"no handler, no action",
+		);
 	});
 
 	it("the Delete rides ONLY with a selection — no bar, no kill switch", () => {

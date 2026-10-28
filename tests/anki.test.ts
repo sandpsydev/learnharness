@@ -366,6 +366,13 @@ describe("tutor prompt seam", () => {
 		assert.match(text, /Never say a card was created, drafted or sent/);
 		assert.match(text, /\[memorise\]/);
 	});
+
+	it("points the verify-app's key-points offer at the same action, still offer-only", async () => {
+		const { ANKI_OFFER_INSTRUCTION } = await import("../src/core/contracts/verify.ts");
+		assert.match(ANKI_OFFER_INSTRUCTION, /Make Anki cards…/);
+		assert.match(ANKI_OFFER_INSTRUCTION, /Offer only/);
+		assert.match(ANKI_OFFER_INSTRUCTION, /do not write cards yourself/);
+	});
 });
 
 // ─── a fake library ─────────────────────────────────────────────────────────

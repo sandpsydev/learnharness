@@ -140,8 +140,8 @@ export function ChainTableBody({
 	onClear: () => void;
 	/** Opens the full-death confirm dialog (owner, 2026-09-29 night). */
 	onDelete: () => void;
-	/** Opens the "Make Anki cards" review panel for the selected nodes. */
-	onAnki: () => void;
+	/** Opens the "Make Anki cards" review panel for the selected nodes (absent = no Anki action). */
+	onAnki?: () => void;
 	onClose: () => void;
 	/** PRACTICE SELECT (2026-10-04): the floating bar's confirm becomes
 	 *  "Practice these" — no delete fence; the caller owns what the
@@ -544,15 +544,17 @@ export function ChainTableBody({
 							</button>
 						) : (
 							<>
-							<button
-								type="button"
-								data-testid="chain-anki"
-								onClick={onAnki}
-								aria-label={`Make Anki cards from ${selection.size} selected ${selection.size === 1 ? "node" : "nodes"}`}
-								className="rounded-full px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-accent"
-							>
-								Make Anki cards…
-							</button>
+							{onAnki && (
+								<button
+									type="button"
+									data-testid="chain-anki"
+									onClick={onAnki}
+									aria-label={`Make Anki cards from ${selection.size} selected ${selection.size === 1 ? "node" : "nodes"}`}
+									className="rounded-full px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-accent"
+								>
+									Make Anki cards…
+								</button>
+							)}
 							{/* The danger fence (owner ruling): a divider quarantines
 								    the destructive action at the bar's right end — the
 								    safe actions and the kill switch never blend. The

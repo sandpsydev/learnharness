@@ -18,6 +18,7 @@
  * The practice pick flow mirrors GraphView's contract verbatim (home
  * lifts the pick set; the chip opens the overlay in select mode).
  */
+import type { GraphContextPick } from "@/src/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ListTreeIcon, UploadIcon } from "lucide-react";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
@@ -90,7 +91,7 @@ export function MinimalHome({
 	 * of the delete fence); the chip in home's composer reflects it. */
 	chainSelectOpen?: boolean;
 	practiceSelection?: ReadonlySet<string>;
-	onPracticeSelectionChange?: (nodes: { id: string; name: string; statement: string }[]) => void;
+	onPracticeSelectionChange?: (nodes: GraphContextPick[]) => void;
 	onChainSelectClose?: () => void;
 }) {
 	const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
@@ -219,10 +220,10 @@ export function MinimalHome({
 					// Resolve ids → nodes against the live snapshot; the
 					// caller holds the pick set (count + seed).
 					const props = snapshot?.propositions ?? [];
-					const picked: { id: string; name: string; statement: string }[] = [];
+					const picked: GraphContextPick[] = [];
 					for (const id of ids) {
 						const n = props.find((node) => node.id === id);
-						if (n) picked.push({ id: n.id, name: n.name, statement: n.statement });
+						if (n) picked.push({ id: n.id, name: n.name, statement: n.statement, systems: n.systems, factType: n.factType });
 					}
 					onPracticeSelectionChange?.(picked);
 				}}

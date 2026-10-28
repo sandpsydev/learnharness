@@ -98,6 +98,7 @@ The existing graph (propositions + reasoning chains, linked to their sessions) i
 |---|---|---|---|
 | `med-prompts` | Phase 1 (1.1–1.5) | none | Prompt files only. |
 | `med-graph-tags` | Phase 4 | none | Graph contracts, extraction, notes import, node card, filter chips. |
+| `med-practice-filter` | Phase 4 downstream practice: add all shown filtered nodes to the selection; pass system/fact-type context and favour next-step vignettes for management. | `med-graph-tags` | Additive selection in practice-select mode. |
 | `med-library` | Phase 6 incl. SlideScribe import | none | New store + tools + Settings UI; local embedding model. |
 | `med-verify-app` | Phase 2, app side | none | Evidence routing in prompts/tools; verify queue + provisional marks; local API the extension talks to; PubMed / Europe PMC tools. |
 | `med-extension` | Phase 2, Chrome extension | `med-verify-app` | Skeleton, app link, highlight-to-send. **Expert AI page selectors need the owner present** (inspect the logged-in page once). |

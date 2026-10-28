@@ -63,6 +63,7 @@
  * camera never moves.
  */
 
+import type { GraphContextPick } from "@/src/core";
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { NotesImportErrors, useNotesImport } from "@/components/notes-import.tsx";
 import Link from "next/link";
@@ -989,7 +990,7 @@ export function GraphView({
 	 *  (Done instead of Delete). */
 	chainSelectOpen?: boolean;
 	practiceSelection?: ReadonlySet<string>;
-	onPracticeSelectionChange?: (nodes: { id: string; name: string; statement: string }[]) => void;
+	onPracticeSelectionChange?: (nodes: GraphContextPick[]) => void;
 	onChainSelectClose?: () => void;
 }) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
@@ -1765,10 +1766,10 @@ export function GraphView({
 					// Resolve ids → nodes against the live snapshot; the
 					// caller holds the pick set (count + seed).
 					const props = snapshot?.propositions ?? [];
-					const picked: { id: string; name: string; statement: string }[] = [];
+					const picked: GraphContextPick[] = [];
 					for (const id of ids) {
 						const n = props.find((node) => node.id === id);
-						if (n) picked.push({ id: n.id, name: n.name, statement: n.statement });
+						if (n) picked.push({ id: n.id, name: n.name, statement: n.statement, systems: n.systems, factType: n.factType });
 					}
 					onPracticeSelectionChange?.(picked);
 				}}

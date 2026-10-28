@@ -21,6 +21,7 @@ graph/coverage.jsonl       Extraction fingerprints, NOT learner assessment
 graph/positions.json      Canvas layout, not semantic relationships
 graph/render-settings.json  Presentation preferences, not learning evidence
 jobs/<job-id>.json        Background work records; delivered artifacts also appear in sessions
+anki/<draft-id>.json      Anki card drafts awaiting review (not learner assessment); cards sent to Anki live in Anki
 ```
 
 `settings.json`, downloaded models, caches, and provider debug logs are not needed

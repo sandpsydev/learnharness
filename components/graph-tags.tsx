@@ -39,11 +39,8 @@ export function isTagFilterActive(filter: TagFilter): boolean {
 	return filter.systems.size > 0 || filter.factTypes.size > 0;
 }
 
-// The ACTIVE filter lives in a tiny shared store, not in GraphView state, so
-// other graph surfaces can read it: the planned practice-select "select all
-// shown" action (task med-practice-filter, built after this one) takes the
-// ids that pass `tagVisibleIds(..., getTagFilter())`. Immutable snapshots, so
-// useSyncExternalStore sees a change only when setTagFilter is called.
+// The active filter is shared by the graph and practice-select overlay.
+// Immutable snapshots let useSyncExternalStore track chip changes.
 let activeTagFilter: TagFilter = EMPTY_TAG_FILTER;
 const tagFilterListeners = new Set<() => void>();
 

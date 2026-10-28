@@ -57,15 +57,24 @@ export async function POST(req: Request) {
 							typeof (p as GraphContextPick).name === "string" &&
 							typeof (p as GraphContextPick).statement === "string",
 					)
-					.slice(0, 64)
 			: [];
 	if (picks.length > 0) {
 		const byId = new Map(stores.graphStore.readNodes().map((n) => [n.id, n]));
+		// Resolve tags from the current stored graph: older callers also get
+		// medical context, and request payloads cannot invent tag values.
+		const taggedPicks = picks.map(({ id, name, statement }) => {
+			const node = byId.get(id);
+			return {
+				id, name, statement,
+				...(node?.systems ? { systems: node.systems } : {}),
+				...(node?.factType ? { factType: node.factType } : {}),
+			};
+		});
 		const pickedNodes = picks.map((p) => byId.get(p.id)).filter((n) => n !== undefined);
 		const chainLines = chainsForSelection(pickedNodes, stores.graphStore.readChains()).map((c) =>
 			formatChainLine(c, Object.fromEntries(byId)),
 		);
-		stores.chatStore.saveMessages(chat.id, [newGraphContextMessage(picks, chainLines)]);
+		stores.chatStore.saveMessages(chat.id, [newGraphContextMessage(taggedPicks, chainLines)]);
 	}
 	return Response.json({ id: chat.id, title: chat.title });
 }

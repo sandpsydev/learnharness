@@ -35,6 +35,7 @@
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+import { factTypeLabel, organSystemLabel, type GraphNodeTags } from "./contracts/graph.ts";
 import { QUESTION_TOOLS } from "./pending.ts";
 import {
 	CONCLUDE_ACK_TEXT,
@@ -242,7 +243,7 @@ export const PRACTICE_CONCLUDE_TOOL = "conclude";
 
 /** One picked proposition of the graph-context marker (the learner's map
  *  pick — name + statement as the learner SAW them at pick time). */
-export interface GraphContextPick {
+export interface GraphContextPick extends GraphNodeTags {
 	id: string;
 	name: string;
 	statement: string;
@@ -270,7 +271,13 @@ export function newGraphContextMessage(picks: readonly GraphContextPick[], chain
 		"[Session context] — picked from the learner's knowledge map when starting this session:",
 		"",
 		"Propositions (id — name: statement; the problem tool's target field uses these ids):",
-		...picks.map((p) => `- [${p.id}] ${p.name}: ${p.statement}`),
+		...picks.map((p) => {
+			const tags = [
+				...(p.systems?.length ? [`Systems: ${p.systems.map(organSystemLabel).join(", ")}`] : []),
+				...(p.factType ? [`Fact type: ${factTypeLabel(p.factType)}`] : []),
+			];
+			return `- [${p.id}] ${p.name}: ${p.statement}${tags.length ? `\n  ${tags.join("; ")}` : ""}`;
+		}),
 	];
 	if (chains.length > 0) {
 		lines.push("", "Reasoning chains among them (premises → conclusion):", ...chains.map((c) => `- ${c}`));

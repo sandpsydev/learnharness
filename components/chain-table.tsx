@@ -71,6 +71,7 @@ import { chainsForSelection, formatChainLine, fuzzyScore } from "@/src/core";
 import type { GraphChain, GraphNode } from "@/src/core";
 import { TopBar } from "@/components/top-bar";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog";
+import { EMPTY_TAG_FILTER, tagVisibleIds, useTagFilter, type TagFilter } from "@/components/graph-tags";
 import { LatexGlyph } from "@/components/latex-glyph";
 
 /** The sortable columns (owner ruling: all three — consistency). */
@@ -116,6 +117,7 @@ export function ChainTableBody({
 	onClose,
 	selectMode,
 	onSelect,
+	tagFilter = EMPTY_TAG_FILTER,
 }: {
 	nodes: GraphNode[];
 	chains: GraphChain[];
@@ -142,9 +144,18 @@ export function ChainTableBody({
 	 *  selection becomes. */
 	selectMode?: boolean;
 	onSelect?: () => void;
+	tagFilter?: TagFilter;
 }) {
 	const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
-	const chains = useMemo(() => chainsForSelection(nodes, storedChains), [nodes, storedChains]);
+	// Only practice picking uses the graph tag filter; ordinary management
+	// keeps its full graph. Keep byId/selection above unfiltered so hidden
+	// picks remain selected and continue to count in the floating bar.
+	const shownNodes = useMemo(() => {
+		if (!selectMode) return nodes;
+		const visible = tagVisibleIds(nodes, [], tagFilter);
+		return nodes.filter((node) => visible.has(node.id));
+	}, [nodes, selectMode, tagFilter]);
+	const chains = useMemo(() => chainsForSelection(shownNodes, storedChains), [shownNodes, storedChains]);
 	const searching = query.trim() !== "";
 
 	// The fuzzy filter: a chain is visible when ANY member matches on
@@ -230,6 +241,7 @@ export function ChainTableBody({
 		return chainsForSelection(selectedNodes, storedChains);
 	}, [selection, byId, storedChains]);
 
+	const shownIds = [...new Set(visibleChains.flatMap((chain) => [...chain.premises, chain.conclusion]))];
 	const nameOf = (id: string) => byId.get(id)?.name ?? id;
 	const dateOf = (id: string) => byId.get(id)?.createdAt.slice(0, 10) ?? "";
 	const dirIcon = (col: ChainSortCol) =>
@@ -246,8 +258,19 @@ export function ChainTableBody({
 			    law: later in the DOM). */}
 			<TopBar>
 				<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-					{chains.length} {chains.length === 1 ? "chain" : "chains"} · {nodes.length} {nodes.length === 1 ? "node" : "nodes"}
+					{chains.length} {chains.length === 1 ? "chain" : "chains"} · {shownNodes.length} {shownNodes.length === 1 ? "node" : "nodes"}
 				</span>
+				{selectMode && (
+					<button
+						type="button"
+						data-testid="practice-select-all-shown"
+						disabled={shownIds.every((id) => selection.has(id))}
+						onClick={() => onToggleNodes(shownIds, true)}
+						className="lh-no-drag shrink-0 rounded-lg border px-2.5 py-1.5 text-xs transition-colors hover:bg-accent disabled:opacity-50"
+					>
+						Select all shown
+					</button>
+				)}
 				<div className="relative shrink-0">
 					<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
 					<input
@@ -620,6 +643,7 @@ export function ChainTableOverlay({
 	controlledSelection?: ReadonlySet<string>;
 	onSelectionChange?: (next: ReadonlySet<string>) => void;
 }) {
+	const tagFilter = useTagFilter();
 	const [query, setQuery] = useState("");
 	const [sort, setSort] = useState<ChainSort>({ col: "name", dir: 1 });
 	const [internalSelection, setInternalSelection] = useState<ReadonlySet<string>>(() => new Set());
@@ -707,6 +731,7 @@ export function ChainTableOverlay({
 					onClose={onClose}
 					selectMode={selectMode}
 					onSelect={onClose}
+					tagFilter={tagFilter}
 				/>
 			</div>
 			{deleteOpen && (

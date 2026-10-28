@@ -26,7 +26,7 @@ process.env.LH_DATA_DIR = TMP_DATA;
 
 const { newGraphContextMessage } = await import("../src/core/native-messages.ts");
 const { toLlmMessages } = await import("../src/core/native-messages.ts");
-import type { LhMessage } from "../src/core/native-messages.ts";
+import type { GraphContextPick, LhMessage } from "../src/core/native-messages.ts";
 const { projectView } = await import("../src/core/view.ts");
 const { POST } = await import("../app/api/chats/route.ts");
 const { initialPromptOwed } = await import("../components/chat.tsx");
@@ -56,6 +56,13 @@ describe("newGraphContextMessage", () => {
 		assert.ok(m.content.includes("- Modus ponens → Soundness"));
 		// the UI payload is the structured pick, not the flattened text
 		assert.deepEqual(m.details, { propositions: PICKS, chains: ["Modus ponens → Soundness"] });
+	});
+
+	it("includes every system and fact type in model-facing and structured context", () => {
+		const picks: GraphContextPick[] = [{ ...PICKS[0]!, systems: ["renal", "endocrine"], factType: "management" }];
+		const message = newGraphContextMessage(picks, []);
+		assert.match(message.content, /Systems: Renal\/Urinary, Endocrine; Fact type: Management/);
+		assert.deepEqual(message.details, { propositions: picks, chains: [] });
 	});
 
 	it("no chains: the chains section stays out entirely", () => {
@@ -138,6 +145,24 @@ describe("POST /api/chats — graphContext becomes message[0]", () => {
 		assert.ok(m.content.includes("- [n_a] Modus ponens: If P implies Q and P holds, Q holds."));
 		// the chain AMONG the picks rides the marker (formatChainLine shape — names)
 		assert.ok(m.content.includes("- Modus ponens → Soundness"));
+	});
+
+	it("uses stored tags for every pick, including selections larger than 64", async () => {
+		const picks = Array.from({ length: 70 }, (_, i) => ({ id: `n_med_${i}`, name: `Fact ${i}`, statement: "Next step." }));
+		for (const p of picks) graphStore.appendNode({ ...p, aliases: [], provenance: [], createdAt: "2026-10-01T00:00:00.000Z",
+			systems: ["renal", "endocrine"], factType: "management" });
+		const res = await POST(new Request("http://test/api/chats", { method: "POST",
+			headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "practice",
+				graphContext: { propositions: picks.map((p) => ({ ...p, systems: ["invented"], factType: "invalid" })) } }) }));
+		const { id } = await res.json() as { id: string };
+		const m = chatStore.getChat(id)!.messages[0] as ReturnType<typeof newGraphContextMessage>;
+		assert.match(m.content, /\[n_med_69\]/);
+		assert.match(m.content, /Systems: Renal\/Urinary, Endocrine; Fact type: Management/);
+		assert.ok(!m.content.includes("invented"));
+		const details = m.details as { propositions: { systems: string[]; factType: string }[] };
+		assert.equal(details.propositions.length, 70);
+		assert.deepEqual(details.propositions[69]!.systems, ["renal", "endocrine"]);
+		assert.equal(details.propositions[69]!.factType, "management");
 	});
 
 	it("no picks (or malformed) → no marker, an empty record as before", async () => {

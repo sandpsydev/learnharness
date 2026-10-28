@@ -1,5 +1,6 @@
 "use client";
 
+import type { GraphContextPick } from "@/src/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
@@ -18,7 +19,7 @@ import type { ChatSettings, GraphSnapshot } from "@/src/core";
 
 /** The draft's pick set (owner round 10): the SAME shape the home pick
  *  bar lifts — resolved nodes as the learner SAW them at pick time. */
-export type DraftPick = { id: string; name: string; statement: string };
+export type DraftPick = GraphContextPick;
 
 /**
  * The sessionless draft view at /chat/new (owner, 2026-09-13): "+ New
@@ -349,7 +350,7 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 							const next: DraftPick[] = [];
 							for (const id of ids) {
 								const n = byId.get(id);
-								if (n) next.push({ id: n.id, name: n.name, statement: n.statement });
+								if (n) next.push({ id: n.id, name: n.name, statement: n.statement, systems: n.systems, factType: n.factType });
 							}
 							applyPicks(next);
 						}}

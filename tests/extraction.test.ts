@@ -2522,3 +2522,203 @@ describe("notes import completion and retry reliability", () => {
 		assert.equal(ledgers.readNodes().length, 2);
 	});
 });
+
+describe("medical tags (docs/medical-spec.md Phase 4)", () => {
+	const submitStep = (payload: unknown): FauxResponseStep => () =>
+		fauxAssistantMessage(
+			[fauxToolCall("submit_findings", payload as ToolCall["arguments"], { id: "tags-call" })],
+			{ stopReason: "toolUse" },
+		);
+
+	it("a session run stores the extractor's organ systems and fact type on the new node; near-miss strings are mapped, unknown dropped", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: fauxEngine([
+				submitStep({
+					propositions: [
+						{
+							id: "p1",
+							name: "Diabetic nephropathy",
+							statement: "Chronic hyperglycaemia damages glomeruli.",
+							aliases: [],
+							messageId: "a2",
+							systems: ["Renal/Urinary", "endocrine", "heart"],
+							factType: "Clinical feature",
+						},
+						{
+							id: "p2",
+							name: "Untagged",
+							statement: "Nothing medical here.",
+							aliases: [],
+							messageId: "a1",
+							systems: ["not a system"],
+							factType: "treatment",
+						},
+					],
+					chains: [],
+				}),
+			]),
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		await pipeline.runExtraction(chatId);
+		const [tagged, plain] = ledgers.readNodes();
+		assert.deepEqual(tagged!.systems, ["renal", "endocrine"]);
+		assert.equal(tagged!.factType, "clinical-feature");
+		assert.ok(!("systems" in plain!) && !("factType" in plain!), "unknown values leave no empty tag keys");
+	});
+
+	it("the notes door assigns tags too", async () => {
+		const ledgers = memoryLedgers();
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", {
+				propositions: [
+					{
+						id: "p1",
+						name: "Metformin",
+						statement: "Metformin lowers hepatic glucose output.",
+						aliases: [],
+						systems: ["endocrine", "general"],
+						factType: "mechanism",
+					},
+				],
+				chains: [],
+			}),
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		await pipeline.importNotes({ filePath: "/vault/pharm.md", text: NOTES_TEXT });
+		const [node] = ledgers.readNodes();
+		assert.deepEqual(node!.systems, ["endocrine", "general"]);
+		assert.equal(node!.factType, "mechanism");
+	});
+
+	it("the extractor's tag fields are optional — a submit without them still merges (weak-model tolerance)", async () => {
+		const ledgers = memoryLedgers();
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", NOTES_FINDINGS),
+			auditor: submitModel("submit_review", NOTES_VERDICT),
+		});
+		await pipeline.importNotes({ filePath: "/vault/vim.md", text: NOTES_TEXT });
+		assert.equal(ledgers.readNodes().length, 1);
+	});
+
+	it("the extractor prompt asks for the tags", () => {
+		assert.match(EXTRACTION_CORE, /organ system\(s\) and its fact\s+type/);
+	});
+
+	describe("tagExistingNodes — the one-off back-fill", () => {
+		const seed = (ledgers: ReturnType<typeof memoryLedgers>) => {
+			const base = {
+				aliases: [],
+				createdAt: "2026-10-01T00:00:00.000Z",
+				provenance: [{ chatId: "chat_x", messageId: "" }],
+			};
+			ledgers.appendNode({ id: "n_a", name: "ACE inhibitors", statement: "ACE inhibitors reduce proteinuria.", ...base });
+			ledgers.appendNode({ id: "n_b", name: "Already", statement: "Done already.", ...base, systems: ["renal"], factType: "mechanism" });
+			ledgers.appendNode({ id: "n_c", name: "Half", statement: "Only systems.", ...base, systems: ["gi"] });
+		};
+		const submitTags = (tags: unknown) =>
+			submitModel("submit_tags", { tags });
+
+		it("tags only the nodes that lack a tag, appends (never rewrites), and reports what it did", async () => {
+			const ledgers = memoryLedgers();
+			seed(ledgers);
+			const before = ledgers.readNodes();
+			let prompt = "";
+			const pipeline = createExtractionPipeline({
+				chatStore,
+				graphStore: ledgers,
+				extractor: fauxEngine([
+					(context) => {
+						prompt = JSON.stringify(context.messages);
+						return fauxAssistantMessage(
+							[
+								fauxToolCall(
+									"submit_tags",
+									{
+										tags: [
+											{ id: "n_a", systems: ["Renal/Urinary", "cardiovascular"], factType: "management" },
+											{ id: "n_c", systems: ["cardiovascular"], factType: "diagnosis" },
+											{ id: "n_ghost", systems: ["gi"] }, // not in the batch — dropped
+										],
+									} as ToolCall["arguments"],
+									{ id: "tag-call" },
+								),
+							],
+							{ stopReason: "toolUse" },
+						);
+					},
+				]),
+				auditor: undefined,
+			});
+			const stats = await pipeline.tagExistingNodes();
+			assert.deepEqual(stats, { untagged: 2, tagged: 2 });
+			assert.ok(prompt.includes("n_a") && prompt.includes("n_c"), "the untagged nodes were sent");
+			assert.ok(!prompt.includes("n_b |"), "the fully tagged node was not");
+			// Append-only: the old lines are untouched, new lines come after.
+			assert.deepEqual(ledgers.readNodes().slice(0, before.length), before);
+			const byId = new Map(getGraph(ledgers).nodes.map((n) => [n.id, n]));
+			assert.deepEqual(byId.get("n_a")!.systems, ["cardiovascular", "renal"]);
+			assert.equal(byId.get("n_a")!.factType, "management");
+			assert.deepEqual(byId.get("n_c")!.systems, ["gi"], "an existing tag is never replaced");
+			assert.equal(byId.get("n_c")!.factType, "diagnosis", "the missing half is filled");
+			assert.equal(byId.get("n_b")!.factType, "mechanism");
+		});
+
+		it("with nothing untagged it makes no model call", async () => {
+			const ledgers = memoryLedgers();
+			ledgers.appendNode({
+				id: "n_b", name: "Already", statement: "Done already.", aliases: [], createdAt: "2026-10-01T00:00:00.000Z",
+				provenance: [], systems: ["renal"], factType: "mechanism",
+			});
+			const pipeline = createExtractionPipeline({ chatStore, graphStore: ledgers, extractor: silentModel() });
+			assert.deepEqual(await pipeline.tagExistingNodes(), { untagged: 0, tagged: 0 });
+		});
+
+		it("refuses honestly with no model configured, and when the provider key is gone", async () => {
+			const ledgers = memoryLedgers();
+			seed(ledgers);
+			await assert.rejects(
+				createExtractionPipeline({ chatStore, graphStore: ledgers }).tagExistingNodes(),
+				ModelsNotConfiguredError,
+			);
+			await assert.rejects(
+				createExtractionPipeline({
+					chatStore,
+					graphStore: ledgers,
+					extractor: submitTags([]),
+					providerKeyMissing: (provider, tier) => providerKeyMissing(provider, [tier]),
+				}).tagExistingNodes(),
+				ProviderKeyMissingError,
+			);
+			assert.equal(ledgers.readNodes().length, 3, "a refused run writes nothing");
+		});
+
+		it("is single-flight: a second concurrent run is refused", async () => {
+			const ledgers = memoryLedgers();
+			seed(ledgers);
+			let release!: () => void;
+			const gate = new Promise<void>((resolve) => (release = resolve));
+			const pipeline = createExtractionPipeline({
+				chatStore,
+				graphStore: ledgers,
+				extractor: gatedSubmitModel("submit_tags", { tags: [] }, gate),
+			});
+			const first = pipeline.tagExistingNodes();
+			await assert.rejects(pipeline.tagExistingNodes(), /already running/);
+			release();
+			assert.deepEqual(await first, { untagged: 2, tagged: 0 });
+			// …and the guard is released afterwards.
+			assert.deepEqual(await createExtractionPipeline({ chatStore, graphStore: ledgers, extractor: submitTags([]) }).tagExistingNodes(), {
+				untagged: 2,
+				tagged: 0,
+			});
+		});
+	});
+});

@@ -3,7 +3,8 @@ import { LEDGER_FILES, POSITIONS_FILE } from "../../config.ts";
 import type { GraphSnapshot } from "../core/contracts.ts";
 import type { GraphCostSummary } from "../core/cost-summary.ts";
 import { graphCostSummary } from "../core/cost-summary.ts";
-import { graphSnapshot } from "../core/graph.ts";
+import { editNodeTags, graphSnapshot } from "../core/graph.ts";
+import { sanitizeFactType, sanitizeSystems, type FactType, type OrganSystem } from "../core/contracts.ts";
 import { birthSessionPartition } from "../core/session-clusters.ts";
 import {
 	deleteNodeTraces,
@@ -119,3 +120,33 @@ export function deleteGraphNode(nodeId: string): NodeDeleteOutcome {
 	return { ok: true, stats, graphRevision: graphRevision() };
 }
 
+
+// ─── node tags (medical fork, Phase 4) ───────────────────────────────────────
+
+/** What editGraphNodeTags did — the route maps it straight to HTTP. */
+export type NodeTagsOutcome =
+	| { ok: false; status: 400; code: "bad_request"; error: string }
+	| { ok: false; status: 404; code: "not_found"; error: string }
+	| { ok: true; tags: { systems: OrganSystem[]; factType?: FactType }; graphRevision: number };
+
+/**
+ * The learner's tag edit from the node's detail card (PATCH
+ * /api/graph/nodes/[id]): body `{ systems: string[], factType: string | null }`.
+ * Both fields REPLACE the node's tags (an empty list / null clears them).
+ * Strict at the door — an unknown system or fact type is a 400, never
+ * silently dropped. Append-only (core/graph.ts editNodeTags): no existing
+ * ledger line is rewritten, so no extraction gate is needed.
+ */
+export function editGraphNodeTags(nodeId: string, body: unknown): NodeTagsOutcome {
+	const bad = (error: string): NodeTagsOutcome => ({ ok: false, status: 400, code: "bad_request", error });
+	if (typeof body !== "object" || body === null) return bad("Body must be {systems: string[], factType: string | null}");
+	const { systems, factType } = body as { systems?: unknown; factType?: unknown };
+	if (!Array.isArray(systems)) return bad("systems must be an array");
+	if (!systems.every((s) => sanitizeSystems([s]).length === 1)) return bad("systems contains an unknown organ system");
+	if (factType !== null && factType !== undefined && sanitizeFactType(factType) === undefined) {
+		return bad("factType is not a known fact type");
+	}
+	const tags = editNodeTags(stores.graphStore, nodeId, { systems, factType: factType ?? undefined });
+	if (tags === null) return { ok: false, status: 404, code: "not_found", error: "No such node" };
+	return { ok: true, tags, graphRevision: graphRevision() };
+}

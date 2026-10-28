@@ -78,6 +78,15 @@ import { DeleteNodeDialog } from "@/components/delete-node-dialog.tsx";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
 import { Hint } from "@/components/ui/hint";
 import {
+	EMPTY_TAG_FILTER,
+	GraphTagsPanel,
+	NodeTagsEditor,
+	isTagFilterActive,
+	setTagFilter,
+	tagVisibleIds,
+	useTagFilter,
+} from "@/components/graph-tags.tsx";
+import {
 	ARROW_LENGTH_LADDER,
 	CHARGE_RANGE,
 	CLUSTER_LABEL_SIZE_LADDER,
@@ -849,6 +858,7 @@ export function GraphChromeRow({
 	settings,
 	changeSettings,
 	onOpenChains,
+	tags,
 }: {
 	isEmpty: boolean;
 	query: string;
@@ -865,6 +875,9 @@ export function GraphChromeRow({
 	/** Opens the chain table overlay (the chains-overlay plan,
 	 *  2026-09-29). */
 	onOpenChains: () => void;
+	/** The medical tag filters + back-fill (Phase 4) — a Tags control
+	 *  between Chains and Import, rendered only when supplied. */
+	tags?: React.ComponentProps<typeof GraphTagsPanel>;
 }) {
 	return (
 		<>
@@ -909,6 +922,11 @@ export function GraphChromeRow({
 							Chains
 						</button>
 					</Hint>
+				</div>
+			)}
+			{!isEmpty && tags && (
+				<div className="graph-chrome-fade-in shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
+					<GraphTagsPanel {...tags} />
 				</div>
 			)}
 			{/* Import notes — its own container (36px, header band); ALWAYS
@@ -1062,14 +1080,22 @@ export function GraphView({
 
 	// The id set that survives the current search — consumed by the
 	// visibility feed and the "no matches" hint.
+	// Tag filter chips (medical fork, Phase 4): which organ systems / fact
+	// types are switched on. Only HIDES nodes — the layout is untouched. Held
+	// in the shared store (components/graph-tags.tsx) so the practice-select
+	// mode can read the same filter later.
+	const tagFilter = useTagFilter();
+	const tagFilterOn = isTagFilterActive(tagFilter);
 	const visibleIds = useMemo(() => {
 		const set = new Set<string>();
-		if (snapshot)
+		if (snapshot) {
+			const byTags = tagFilterOn ? tagVisibleIds(snapshot.nodes, snapshot.impLinks, tagFilter) : null;
 			for (const node of snapshot.nodes) {
-				if (isNodeVisible(node, query)) set.add(node.id);
+				if (isNodeVisible(node, query) && (byTags === null || byTags.has(node.id))) set.add(node.id);
 			}
+		}
 		return set;
-	}, [snapshot, query]);
+	}, [snapshot, query, tagFilter, tagFilterOn]);
 
 	// Fetch the derived graph. Re-runs when a background pipeline run
 	// finishes (refreshTick) — its merges just landed in the ledger.
@@ -1447,10 +1473,10 @@ export function GraphView({
 	// Feed #3 — visibility: hidden nodes drop out of rendering, picking,
 	// hover, AND labels; edges drop when either endpoint is hidden.
 	useEffect(() => {
-		rendererRef.current?.setVisible(query.trim() ? visibleIds : null);
+		rendererRef.current?.setVisible(query.trim() || tagFilterOn ? visibleIds : null);
 		// The open detail card cannot outlive its node's visibility.
 		setSelected((sel) => (sel && visibleIds.has(sel.node.id) ? sel : null));
-	}, [visibleIds, query]);
+	}, [visibleIds, query, tagFilterOn]);
 
 	// Feed #4 — region tuning. `isEmpty` in the deps (same as Feed #2):
 	// the settings fetch resolves BEFORE the snapshot creates the renderer,
@@ -1605,7 +1631,7 @@ export function GraphView({
 					isEmpty={isEmpty}
 					query={query}
 					onQuery={setQuery}
-					noMatch={snapshot !== null && visibleIds.size === 0 && query.trim() !== ""}
+					noMatch={snapshot !== null && visibleIds.size === 0 && (query.trim() !== "" || tagFilterOn)}
 					importing={importing}
 					searchInputRef={searchInputRef}
 					fileInputRef={fileInputRef}
@@ -1613,6 +1639,14 @@ export function GraphView({
 					settings={settings}
 					changeSettings={changeSettings}
 					onOpenChains={() => setChainsOpen(true)}
+					tags={{
+						nodes: snapshot?.propositions ?? [],
+						filter: tagFilter,
+						onFilter: setTagFilter,
+						// The back-fill appended lines: refetch the snapshot.
+						onBackfilled: (graphRevision) =>
+							window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { graphRevision } })),
+					}}
 				/>
 			</div>
 
@@ -1650,6 +1684,23 @@ export function GraphView({
 				>
 					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
 					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
+					<NodeTagsEditor
+						// Re-key per node: a different card starts from its own tags.
+						key={selected.node.id}
+						nodeId={selected.node.id}
+						systems={selected.node.systems}
+						factType={selected.node.factType}
+						onSaved={(tags, graphRevision) => {
+							// Show the saved tags on the open card right away; the
+							// refetch (below) brings the same truth into the snapshot.
+							setSelected((sel) =>
+								sel && sel.node.id === selected.node.id
+									? { ...sel, node: { ...sel.node, systems: tags.systems, factType: tags.factType } }
+									: sel,
+							);
+							window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { graphRevision } }));
+						}}
+					/>
 					{selected.sourceIds.length > 0 ? (
 						<div className="mt-3 flex flex-col gap-1">
 							<div className="text-xs text-muted-foreground">Sessions</div>

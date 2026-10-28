@@ -50,8 +50,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import type { CoverageEntry,
-} from "./contracts/graph.ts";
+import { sanitizeFactType, sanitizeSystems, type CoverageEntry, type FactType, type OrganSystem } from "./contracts/graph.ts";
 import type {
 	AuditVerdicts,
 	ExtractedChain,
@@ -121,6 +120,18 @@ function pointOf(chatId: string, messageId?: string): ProvenancePoint[] {
 	return [{ chatId, messageId: messageId ?? "" }];
 }
 
+/** The tag fields of a proposition (or tag request), cleaned: only the
+ *  fields that carry a known value are present, so a node line never gains
+ *  empty `systems: []` / `factType: undefined` keys. */
+function tagFields(tags: { systems?: unknown; factType?: unknown }): { systems?: OrganSystem[]; factType?: FactType } {
+	const systems = sanitizeSystems(tags.systems);
+	const factType = sanitizeFactType(tags.factType);
+	return {
+		...(systems.length > 0 ? { systems } : {}),
+		...(factType !== undefined ? { factType } : {}),
+	};
+}
+
 const samePoint = (a: ProvenancePoint, b: ProvenancePoint): boolean =>
 	a.chatId === b.chatId && a.messageId === b.messageId;
 
@@ -176,6 +187,7 @@ export function mergeFindings(
 		// line (each re-encounter anchors to ITS passage); absent (notes,
 		// legacy/core callers) → "", chat-level as before.
 		const points = pointOf(chatId, p.messageId);
+		const tags = tagFields(p);
 		const linkTo = linkOf.get(p.id);
 		let graphNodeId: string;
 		if (linkTo !== undefined && existingIds.has(linkTo)) {
@@ -192,6 +204,7 @@ export function mergeFindings(
 				aliases: [...p.aliases],
 				createdAt: now,
 				provenance: points,
+				...tags,
 			});
 		} else {
 			const node: GraphNode = {
@@ -201,6 +214,7 @@ export function mergeFindings(
 				aliases: [...p.aliases],
 				createdAt: now,
 				provenance: points,
+				...tags,
 			};
 			ledgers.appendNode(node);
 			stats.nodes++;
@@ -381,6 +395,65 @@ export function simplifyChains(lines: GraphChain[]): GraphChain[] {
 	return lines.filter((line) => !droppedKeys.has(chainKey(line.premises, line.conclusion)));
 }
 
+// ─── tag writes (medical fork, Phase 4) ─────────────────────────────────────
+
+/** A tag-only node line: it names the node by id and carries NO phrasing and
+ *  NO provenance, so reading it back (getGraph) changes nothing but the
+ *  tags. Appended — an existing ledger line is never rewritten. */
+function tagLine(node: GraphNode, tags: { systems?: OrganSystem[]; factType?: FactType }, edited: boolean): GraphNode {
+	return {
+		id: node.id,
+		name: "",
+		statement: "",
+		aliases: [],
+		createdAt: new Date().toISOString(),
+		provenance: [],
+		...tags,
+		...(edited ? { tagsEdited: true } : {}),
+	};
+}
+
+/** The learner's edit from the node's detail card: REPLACES both tags
+ *  (an empty list / absent fact type clears them). Returns the node's new
+ *  tags, or null when no such node exists. */
+export function editNodeTags(
+	graphStore: GraphStore,
+	nodeId: string,
+	input: { systems?: unknown; factType?: unknown },
+): { systems: OrganSystem[]; factType?: FactType } | null {
+	const node = getGraph(graphStore).nodes.find((n) => n.id === nodeId);
+	if (!node) return null;
+	const tags = tagFields(input);
+	graphStore.appendNode(tagLine(node, tags, true));
+	return { systems: tags.systems ?? [], ...(tags.factType !== undefined ? { factType: tags.factType } : {}) };
+}
+
+/** The back-fill's write: tags for nodes that lack them. Each line only
+ *  FILLS what is missing (first assignment sticks), so a node tagged by a
+ *  concurrent extraction or by the learner is never overwritten. Unknown
+ *  node ids and empty assignments are skipped. Returns how many nodes got
+ *  at least one new tag. */
+export function fillNodeTags(
+	graphStore: GraphStore,
+	assignments: ReadonlyArray<{ id: string; systems?: unknown; factType?: unknown }>,
+): number {
+	const byId = new Map(getGraph(graphStore).nodes.map((n) => [n.id, n]));
+	let tagged = 0;
+	for (const a of assignments) {
+		const node = byId.get(a.id);
+		if (!node) continue;
+		const tags = tagFields(a);
+		const fill = {
+			...(node.systems === undefined && tags.systems !== undefined ? { systems: tags.systems } : {}),
+			...(node.factType === undefined && tags.factType !== undefined ? { factType: tags.factType } : {}),
+		};
+		if (Object.keys(fill).length === 0) continue;
+		graphStore.appendNode(tagLine(node, fill, false));
+		tagged++;
+	}
+	return tagged;
+}
+
 // ─── derivation (reads only — everything below is recomputable) ─────────────
 
 /** The merged STORED truth: propositions + chains (chains-primary, owner
@@ -405,11 +478,32 @@ export interface DerivedGraph {
 export function getGraph(graphStore: Pick<GraphStore, "readNodes" | "readChains">): DerivedGraph {
 	// Merge node lines by id (first line defines; later lines add phrasings).
 	const byId = new Map<string, GraphNode>();
+	// Node ids whose tags the learner edited: later extraction/back-fill
+	// lines must not fill over them (an edit that cleared a tag stays clear).
+	const tagsLocked = new Set<string>();
 	for (const line of graphStore.readNodes()) {
 		const existing = byId.get(line.id);
 		if (!existing) {
-			byId.set(line.id, { ...line, aliases: [...line.aliases], provenance: [...line.provenance] });
+			const { tagsEdited, systems: _s, factType: _f, ...rest } = line;
+			const node: GraphNode = { ...rest, aliases: [...line.aliases], provenance: [...line.provenance] };
+			Object.assign(node, tagFields(line));
+			byId.set(line.id, node);
+			if (tagsEdited === true) tagsLocked.add(line.id);
 			continue;
+		}
+		// TAGS (medical fork, Phase 4). The learner's edit line replaces
+		// both tags outright (latest edit wins) and locks them; any other
+		// line only FILLS a tag the node does not have yet — first
+		// assignment sticks, like the name.
+		const lineTags = tagFields(line);
+		if (line.tagsEdited === true) {
+			delete existing.systems;
+			delete existing.factType;
+			Object.assign(existing, lineTags);
+			tagsLocked.add(line.id);
+		} else if (!tagsLocked.has(line.id)) {
+			if (existing.systems === undefined && lineTags.systems !== undefined) existing.systems = lineTags.systems;
+			if (existing.factType === undefined && lineTags.factType !== undefined) existing.factType = lineTags.factType;
 		}
 		// A later line's statement is a phrasing, not a replacement.
 		for (const phrasing of [line.statement, ...line.aliases]) {

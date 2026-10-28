@@ -20,6 +20,8 @@ import { planTools, type PlanToolContext } from "./tools/plan.ts";
 import { probeDoneTool, type ProbeDoneContext } from "./tools/probe.ts";
 import { proberGraphTools } from "./tools/graph.ts";
 import { libraryTools, type LibraryToolContext } from "./tools/library.ts";
+import { literatureTools } from "./tools/literature.ts";
+import { verifyTools, type VerifyToolContext } from "./tools/verify.ts";
 import { readTool } from "./tools/read.ts";
 import { lsTool } from "./tools/ls.ts";
 import { findTool } from "./tools/find.ts";
@@ -409,6 +411,10 @@ export interface TeacherToolContext extends PlanToolContext {
 	searchAvailable?: () => boolean;
 	/** The learner's PDF library (medical fork, Phase 6) — see ProberToolContext. */
 	library?: LibraryToolContext;
+	/** Evidence routing (medical fork): present = the teacher also holds
+	 *  verify_queue + evidence_sources. Absent (tests, bare contexts) = the
+	 *  pair is not registered. The chatId rides the teacher's own ctx. */
+	verify?: Omit<VerifyToolContext, "chatId">;
 }
 
 /**
@@ -470,6 +476,11 @@ export function createTeacherTools(
 			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
 			// The learner's own books (slides, textbooks, SlideScribe notes).
 			...(ctx.library ? libraryTools(ctx.library) : {}),
+			// Evidence routing (medical fork): primary-evidence lookups are
+			// keyless and always on; the Expert AI queue + source report need
+			// the composition root's wiring.
+			...literatureTools,
+			...(ctx.verify ? verifyTools({ chatId: ctx.chatId, ...ctx.verify }) : {}),
 		},
 		withoutMechanics(enabled),
 		),

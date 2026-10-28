@@ -180,11 +180,24 @@ describe("teacher wiring", () => {
 		assert.ok(wired.includes("verify_queue") && wired.includes("evidence_sources"));
 	});
 
+	it("the new tool descriptions address the learner as you/the learner, never he/his/him", () => {
+		const chatId = newChat();
+		const tools = { ...verifyTools(toolCtx(chatId)), ...createTeacherTools({ chatId, chatStore, jobStore, spawn: () => {} }) };
+		for (const name of ["verify_queue", "evidence_sources", "pubmed_search", "pubmed_fetch", "europepmc_search"]) {
+			assert.doesNotMatch(tools[name]!.description, /\b(?:he|his|him|himself)\b/i, name);
+		}
+	});
+
 	it("the teacher's prompt routes by question type and carries the rules the tools cannot enforce", () => {
 		const prompt = composeInstructions("teacher");
 		for (const needle of ["UpToDate Expert AI", "verify_queue", "evidence_sources", "pubmed_search", "provisional", "self-contained", "Never put a name", "Web search is off"]) {
 			assert.ok(prompt.includes(needle), `teacher prompt mentions ${needle}`);
 		}
+		// The merged prompt rules: no third-person pronouns for the learner; a
+		// citation tag only for a source actually read this session.
+		assert.doesNotMatch(prompt, /\b(?:he|his|him|himself)\b/i);
+		assert.ok(prompt.includes("only for a source you have actually read in this session"));
+		assert.ok(prompt.includes("unverified, from memory"));
 	});
 });
 

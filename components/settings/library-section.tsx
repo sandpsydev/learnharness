@@ -11,13 +11,16 @@
  *   picked too, the section asks for the file the note names (`source_pdf`).
  * - A progress bar per book while it indexes; the list polls once a second
  *   only while something is indexing.
+ * - "Make Anki cards…" on a ready book: pick a section (an outline entry or a
+ *   page range, at most 60 pages) and the Anki review panel drafts cards from it.
  *
  * The view is presentational (LibraryView) so render tests pin its markup;
  * LibrarySection owns the fetches.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { LibraryBook, LibraryListing } from "@/src/core";
+import { tocSectionPages, type AnkiOrigin, type LibraryBook, type LibraryListing } from "@/src/core";
+import { AnkiDialog } from "@/components/anki-dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -95,6 +98,61 @@ export interface LibraryViewProps {
 	onImport: () => void;
 	onRemove: (book: LibraryBook) => void;
 	onRetry: (book: LibraryBook, action: "reindex" | "embed") => void;
+	/** Open the Anki review panel for a section of a ready book (absent = no Anki action). */
+	onMakeCards?: (book: LibraryBook, pages: string) => void;
+}
+
+/**
+ * "Make Anki cards…" for one ready book (medical spec Phase 5, trigger c):
+ * collapsed to a link; open, it takes an outline section or a page range.
+ */
+export function BookAnkiControl({ book, onMakeCards }: { book: LibraryBook; onMakeCards: (pages: string) => void }) {
+	const [open, setOpen] = useState(false);
+	const [pages, setPages] = useState("");
+	const unit = book.kind === "slidescribe" ? "slides" : "pages";
+	if (!open) {
+		return (
+			<button type="button" className="self-start text-xs underline" data-testid={`library-anki-${book.id}`} onClick={() => setOpen(true)}>
+				Make Anki cards…
+			</button>
+		);
+	}
+	return (
+		<div className="flex flex-wrap items-center gap-2" data-testid={`library-anki-form-${book.id}`}>
+			{book.toc.length > 0 && (
+				<select
+					aria-label="Outline section"
+					className="max-w-[16rem] rounded-sm border border-border bg-background px-1.5 py-1 text-xs"
+					value=""
+					onChange={(e) => {
+						if (e.target.value !== "") setPages(tocSectionPages(book.toc, Number(e.target.value), book.pageCount));
+					}}
+				>
+					<option value="">Pick an outline section…</option>
+					{book.toc.map((entry, i) => (
+						<option key={i} value={i}>
+							{"\u00a0\u00a0".repeat(entry.depth)}
+							{entry.title} (p.{entry.page})
+						</option>
+					))}
+				</select>
+			)}
+			<input
+				aria-label={`Which ${unit}`}
+				data-testid={`library-anki-pages-${book.id}`}
+				className="w-32 rounded-sm border border-border bg-background px-2 py-1 text-xs"
+				placeholder={`${unit}, e.g. 12-20`}
+				value={pages}
+				onChange={(e) => setPages(e.target.value)}
+			/>
+			<Button type="button" size="sm" data-testid={`library-anki-go-${book.id}`} disabled={pages.trim() === ""} onClick={() => onMakeCards(pages.trim())}>
+				Draft cards
+			</Button>
+			<button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setOpen(false)}>
+				Cancel
+			</button>
+		</div>
+	);
 }
 
 const MODE_TEXT = "Text only — fast and free";
@@ -258,6 +316,10 @@ export function LibraryView(props: LibraryViewProps) {
 							</p>
 						)}
 
+						{book.status === "ready" && props.onMakeCards && (
+							<BookAnkiControl book={book} onMakeCards={(pages) => props.onMakeCards?.(book, pages)} />
+						)}
+
 						{book.status === "ready" && !book.embeddings && (
 							<button type="button" className="self-start text-xs underline" data-testid={`library-embed-${book.id}`} onClick={() => props.onRetry(book, "embed")}>
 								Retry search model
@@ -286,6 +348,7 @@ export function LibrarySection() {
 	const [note, setNote] = useState<{ file: File; expectedName: string } | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [message, setMessage] = useState<string | null>(null);
+	const [ankiOrigin, setAnkiOrigin] = useState<AnkiOrigin | null>(null);
 	const pdfInput = useRef<HTMLInputElement | null>(null);
 	const noteInput = useRef<HTMLInputElement | null>(null);
 	const notePdfInput = useRef<HTMLInputElement | null>(null);
@@ -446,7 +509,9 @@ export function LibrarySection() {
 				onImport={() => void importPdfs()}
 				onRemove={(book) => void remove(book)}
 				onRetry={(book, action) => void act(book, action)}
+				onMakeCards={(book, pages) => setAnkiOrigin({ kind: "library", bookId: book.id, pages })}
 			/>
+			<AnkiDialog origin={ankiOrigin} onClose={() => setAnkiOrigin(null)} />
 		</>
 	);
 }

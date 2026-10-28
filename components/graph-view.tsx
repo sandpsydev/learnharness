@@ -77,6 +77,7 @@ import { useServerEvent, useServerResync } from "@/components/server-events";
 import { MenuShell } from "@/components/menu-shell.tsx";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog.tsx";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
+import { AnkiDialog } from "@/components/anki-dialog";
 import { Hint } from "@/components/ui/hint";
 import {
 	EMPTY_TAG_FILTER,
@@ -998,6 +999,8 @@ export function GraphView({
 	const cardRef = useRef<HTMLDivElement | null>(null);
 	const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
+	// "Make Anki cards" from the open node card (medical spec Phase 5).
+	const [ankiNodeId, setAnkiNodeId] = useState<string | null>(null);
 	// The latest snapshot for the renderer's click callbacks (they are
 	// constructed once, so they read through this ref, never a closure).
 	const snapshotRef = useRef<GraphSnapshot | null>(null);
@@ -1702,6 +1705,14 @@ export function GraphView({
 							window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { graphRevision } }));
 						}}
 					/>
+					<button
+						type="button"
+						data-testid="node-anki"
+						onClick={() => setAnkiNodeId(selected.node.id)}
+						className="mt-3 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+					>
+						Make Anki cards…
+					</button>
 					{selected.sourceIds.length > 0 ? (
 						<div className="mt-3 flex flex-col gap-1">
 							<div className="text-xs text-muted-foreground">Sessions</div>
@@ -1737,6 +1748,10 @@ export function GraphView({
 					)}
 				</div>
 			)}
+			<AnkiDialog
+				origin={ankiNodeId ? { kind: "nodes", nodeIds: [ankiNodeId] } : null}
+				onClose={() => setAnkiNodeId(null)}
+			/>
 			{/* The chain table overlay (chains-overlay plan, 2026-09-29):
 			    ABSOLUTE INSIDE the graph area (the session-overlay idiom —
 			    never a body portal) so the app chrome stays sharp and

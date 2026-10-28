@@ -47,5 +47,5 @@ The parser matches `slidescribe/assemble.py`: frontmatter (`title`, `course`, `s
 
 ## Seams for later work
 
-- **Anki generator (`med-anki`)**: spread `libraryTools({ reader })` from `src/agent/tools/library.ts` into its own registry; `library.reader` and `library.toolContext()` (`src/server/library.ts`) supply the reader. "Make Anki cards from a library PDF section" can read a section through `reader.read(book, pages)`.
+- **Anki generator**: wired. Settings → Library → *Make Anki cards…* on a ready book takes an outline section or a page range (at most 60 pages) and opens the Anki review panel. `libraryMaterial(reader, origin)` in `src/server/anki.ts` reads the pages through `reader.read` under their citation headers, and the card maker is given `libraryTools({ reader })`.
 - **Agents**: `ProberToolContext`, `TeacherToolContext` and `PracticeToolContext` each take an optional `library` context; `chat-handler.ts` passes it only while the library has a searchable book. A user toggle `agent.tools.library_search = false` (or `library_read`) removes a tool through the existing generic tool filter.

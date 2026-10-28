@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
+import { AnkiDialog } from "@/components/anki-dialog";
 import type { ChatDeleteMode } from "@/src/core";
 import { DumbbellIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
@@ -547,6 +548,8 @@ function SessionsSidebar() {
 	const ctxAnchorRef = useRef<HTMLElement | null>(null);
 	const [renamingId, setRenamingId] = useState<string | null>(null);
 	const [deleting, setDeleting] = useState<ChatListItem | null>(null);
+	// "Make Anki cards" (medical spec Phase 5): the session whose cards are being drafted/reviewed.
+	const [ankiChatId, setAnkiChatId] = useState<string | null>(null);
 
 	const openContext = (e: React.MouseEvent<HTMLButtonElement>, chat: ChatListItem) => {
 		e.preventDefault(); // suppress the native menu
@@ -911,6 +914,19 @@ function SessionsSidebar() {
 						>
 							Export as Markdown…
 						</button>
+						{/* Anki export (medical spec Phase 5): on demand only — opens the
+						    review panel, which drafts cards in the background. */}
+						<button
+							type="button"
+							data-testid="ctx-anki"
+							onClick={() => {
+								setAnkiChatId(ctxChatId);
+								setCtxChatId(null);
+							}}
+							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-foreground transition-colors hover:bg-accent"
+						>
+							Make Anki cards…
+						</button>
 						<button
 							type="button"
 							data-testid="ctx-delete"
@@ -930,6 +946,10 @@ function SessionsSidebar() {
 
 				{/* The two-option delete dialog (wave 6) — portaled to body
 				    by the component itself, lives here for state locality. */}
+				<AnkiDialog
+					origin={ankiChatId ? { kind: "session", chatId: ankiChatId } : null}
+					onClose={() => setAnkiChatId(null)}
+				/>
 				<DeleteSessionDialog
 					chat={deleting}
 					onClose={() => setDeleting(null)}

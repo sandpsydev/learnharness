@@ -81,6 +81,7 @@ const BASE = {
 	onClear: () => {},
 	onGenerate: () => {},
 	onDelete: () => {},
+	onAnki: () => {},
 	onClose: () => {},
 };
 
@@ -284,6 +285,18 @@ describe("ChainTableBody — the floating selection bar (never shifts layout)", 
 		assert.ok(html.indexOf('chain-danger-divider"') < html.indexOf('chain-delete"'));
 	});
 
+	it("offers Make Anki cards on the selection, on the safe side of the danger fence", () => {
+		const html = render({ selection: new Set(["a", "b"]) });
+		const btn = html.match(/<button[^>]*data-testid="chain-anki"[^>]*>/)?.[0] ?? "";
+		assert.match(btn, /aria-label="Make Anki cards from 2 selected nodes"/);
+		assert.ok(html.indexOf('data-testid="chain-anki"') < html.indexOf('chain-danger-divider"'));
+		assert.ok(!render().includes('data-testid="chain-anki"'), "no selection, no action");
+		assert.ok(
+			!render({ selection: new Set(["a"]), onAnki: undefined }).includes('data-testid="chain-anki"'),
+			"no handler, no action",
+		);
+	});
+
 	it("the Delete rides ONLY with a selection — no bar, no kill switch", () => {
 		const html = render({ expandedClusters: new Set(["chat1"]) });
 		assert.ok(!html.includes('data-testid="chain-delete"'));
@@ -349,6 +362,7 @@ describe("ChainTableOverlay — the lifted practice pick (owner vision, 2026-10-
 		assert.ok(html.includes('data-testid="chain-practice-done"'));
 		assert.ok(html.includes("Done"));
 		assert.ok(!html.includes('data-testid="chain-delete"'), "no delete while picking");
+		assert.ok(!html.includes('data-testid="chain-anki"'), "no Anki action while picking");
 		assert.ok(!html.includes('data-testid="chain-danger-divider"'));
 	});
 

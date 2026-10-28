@@ -195,10 +195,11 @@ export function expertAiCitation(isoDate: string): string {
 }
 
 /** Offer hook for Anki (spec: "key points are offered for Anki (offer hook
- *  only)"). THE SEAM med-anki replaces: today it is only a sentence in the
- *  teacher's brief; no card is made here. */
+ *  only)"). The learner turns the offer into cards with the session's "Make
+ *  Anki cards…" action (docs/medical-spec.md Phase 5); the teacher only
+ *  offers and points there, and never makes or sends cards itself. */
 export const ANKI_OFFER_INSTRUCTION =
-	"Then offer, in one short line, to save the key points for Anki. Offer only — card generation is a separate feature, so do not write cards yourself.";
+	'Then offer, in one short line, to save the key points for Anki, and say the learner can do it with "Make Anki cards…" (right-click this session in the session list). Offer only — you cannot make or send cards, so do not write cards yourself.';
 
 function checkLine(c: CitationCheck): string {
 	const label = c.kind === "pmid" ? `PMID ${c.id}` : `DOI ${c.id}`;

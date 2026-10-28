@@ -72,6 +72,7 @@ import type { GraphChain, GraphNode } from "@/src/core";
 import { TopBar } from "@/components/top-bar";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog";
 import { EMPTY_TAG_FILTER, tagVisibleIds, useTagFilter, type TagFilter } from "@/components/graph-tags";
+import { AnkiDialog } from "@/components/anki-dialog";
 import { LatexGlyph } from "@/components/latex-glyph";
 
 /** The sortable columns (owner ruling: all three — consistency). */
@@ -114,6 +115,7 @@ export function ChainTableBody({
 	onToggleNodes,
 	onClear,
 	onDelete,
+	onAnki,
 	onClose,
 	selectMode,
 	onSelect,
@@ -138,6 +140,8 @@ export function ChainTableBody({
 	onClear: () => void;
 	/** Opens the full-death confirm dialog (owner, 2026-09-29 night). */
 	onDelete: () => void;
+	/** Opens the "Make Anki cards" review panel for the selected nodes (absent = no Anki action). */
+	onAnki?: () => void;
 	onClose: () => void;
 	/** PRACTICE SELECT (2026-10-04): the floating bar's confirm becomes
 	 *  "Practice these" — no delete fence; the caller owns what the
@@ -540,6 +544,17 @@ export function ChainTableBody({
 							</button>
 						) : (
 							<>
+							{onAnki && (
+								<button
+									type="button"
+									data-testid="chain-anki"
+									onClick={onAnki}
+									aria-label={`Make Anki cards from ${selection.size} selected ${selection.size === 1 ? "node" : "nodes"}`}
+									className="rounded-full px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-accent"
+								>
+									Make Anki cards…
+								</button>
+							)}
 							{/* The danger fence (owner ruling): a divider quarantines
 								    the destructive action at the bar's right end — the
 								    safe actions and the kill switch never blend. The
@@ -650,6 +665,8 @@ export function ChainTableOverlay({
 	const [expandedClusters, setExpandedClusters] = useState<ReadonlySet<string>>(() => new Set());
 	const [expandedChains, setExpandedChains] = useState<ReadonlySet<string>>(() => new Set());
 	const [deleteOpen, setDeleteOpen] = useState(false);
+	// "Make Anki cards" for the selection (medical spec Phase 5): the node ids being reviewed.
+	const [ankiNodeIds, setAnkiNodeIds] = useState<string[] | null>(null);
 
 	// Controlled when the caller lifts the selection (the practice pick
 	// set); internal (uncontrolled) otherwise — the delete flow's own.
@@ -662,7 +679,7 @@ export function ChainTableOverlay({
 	// Esc dismisses (unless a dialog has focus — each dialog's own Esc
 	// owns its layer; all listen on window, so the guards are explicit).
 	useEffect(() => {
-		if (!open || deleteOpen) return;
+		if (!open || deleteOpen || ankiNodeIds) return;
 		const onKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
 				// THE ONE-ESC LAW (owner, keyboard round 2026-10-06): claim
@@ -675,7 +692,7 @@ export function ChainTableOverlay({
 		};
 		document.addEventListener("keydown", onKeyDown);
 		return () => document.removeEventListener("keydown", onKeyDown);
-	}, [open, deleteOpen, onClose]);
+	}, [open, deleteOpen, ankiNodeIds, onClose]);
 
 	if (!open) return null;
 
@@ -728,12 +745,17 @@ export function ChainTableOverlay({
 					onToggleNodes={toggleNodes}
 					onClear={() => applySelection(new Set())}
 					onDelete={() => setDeleteOpen(true)}
+					onAnki={() => setAnkiNodeIds(nodeIds)}
 					onClose={onClose}
 					selectMode={selectMode}
 					onSelect={onClose}
 					tagFilter={tagFilter}
 				/>
 			</div>
+			<AnkiDialog
+				origin={ankiNodeIds ? { kind: "nodes", nodeIds: ankiNodeIds } : null}
+				onClose={() => setAnkiNodeIds(null)}
+			/>
 			{deleteOpen && (
 				<DeleteNodeDialog
 					nodes={selectedNodes.map((n) => ({ id: n.id, name: n.name }))}

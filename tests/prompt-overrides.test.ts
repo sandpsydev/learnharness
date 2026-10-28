@@ -189,6 +189,11 @@ describe("the source-derived segment list", () => {
 		);
 		assert.equal(teacher.some((s) => s.path === "teacher/05-method.md"), true);
 		assert.equal(teacher.some((s) => s.path === "teacher/10-planning.md"), true);
+		const medicalIndex = teacher.findIndex((s) => s.path === "teacher/06-medical-facts.md");
+		assert.equal(medicalIndex, teacher.findIndex((s) => s.path === "teacher/05-method.md") + 1);
+		assert.equal(teacher[medicalIndex]?.shared, false);
+		assert.ok(allSegmentPaths().includes("teacher/06-medical-facts.md"));
+		assert.equal(prober.some((s) => s.path === "teacher/06-medical-facts.md"), false);
 		assert.equal(teacher.some((s) => s.path === "teacher/60-probing-in-brief.md"), false);
 		assert.equal(
 			teacher.every(
@@ -210,6 +215,27 @@ describe("the source-derived segment list", () => {
 		assert.equal(teacher.some((s) => s.path.startsWith("prober/")), false);
 		// README and other non-numeric files never load.
 		assert.equal(allSegmentPaths().some((p) => p.includes("README")), false);
+	});
+
+	it("composes medical accuracy for all agents, with facts and bedside rules only in teaching", () => {
+		for (const kind of ["teacher", "prober", "practice"] as const) {
+			const prompt = teacherAgent.composeInstructions(kind);
+			for (const tier of ["**Settled**", "**Changing**", "**Conflict**"]) assert.ok(prompt.includes(tier));
+			assert.ok(prompt.includes("citations only on Changing-tier facts — never on settled science"));
+			assert.ok(prompt.includes("**unverified**"));
+			assert.ok(prompt.includes("Address the learner directly as **you/your**"));
+			assert.doesNotMatch(prompt, /\b(?:he|his|him|himself)\b/i);
+			assert.equal(prompt.includes("# Medical facts — amendment to the method"), kind === "teacher");
+			assert.equal(prompt.includes("**Bedside endpoint:**"), kind === "teacher");
+		}
+		const teacher = teacherAgent.composeInstructions("teacher");
+		assert.ok(teacher.includes("Never invent a rationale"));
+		assert.ok(teacher.includes("mark it [memorise]"));
+		assert.ok(teacher.includes("Suggest it for Anki export"));
+		const practice = teacherAgent.composeInstructions("practice");
+		assert.ok(practice.includes("exactly 5 options, A–E"));
+		assert.ok(practice.includes("**Free-response next-step:**"));
+		assert.ok(practice.includes("Out of scope: lab/ECG/image interpretation, long-case MEQ"));
 	});
 
 	it("effective segments: switch+file → override; either missing → source text", () => {

@@ -1,0 +1,12 @@
+:root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; }
+body { margin: 0; padding: 18px; background: Canvas; color: CanvasText; }
+.popup { width: 400px; } .options { max-width: 640px; margin: 36px auto; }
+header, .row { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+h1 { font-size: 20px; margin: 0 0 12px; } h2 { font-size: 16px; }
+section, details { margin-top: 18px; border-top: 1px solid GrayText; padding-top: 12px; }
+article { padding: 12px 0; border-bottom: 1px solid GrayText; }
+label { display: block; margin-top: 12px; font-weight: 600; }
+input, textarea { display: block; box-sizing: border-box; width: 100%; padding: 8px; font: inherit; }
+textarea { resize: vertical; } button { padding: 7px 10px; margin: 6px 6px 6px 0; font: inherit; cursor: pointer; }
+button:disabled { cursor: wait; opacity: .6; } .prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
+.note { font-size: 12px; color: GrayText; } #notice { overflow-wrap: anywhere; } summary { cursor: pointer; }

@@ -486,8 +486,8 @@ export function Chat({
 	}, [resumeStream]);
 
 	// The practice dock's send (ONE lane, owner 2026-10-05): POSTs the
-	// thinking against the ACTIVE problem — whether it claims an answer is
-	// read from the text by the agent, not declared here. Starts a turn;
+	// thinking against the ACTIVE problem — MCQ selections arrive labeled
+	// as claimed answers in the text; grading stays with the agent. Starts a turn;
 	// the dock stays mounted (the problem is still active until the agent
 	// concludes).
 	const submitThinking = useCallback(
@@ -2383,8 +2383,9 @@ function DockOverlay({
 								/>
 							) : practice ? (
 								<PracticeDock
+									key={practice.toolCallId}
 									problemCallId={practice.toolCallId}
-									input={practice.input as { statement: string }}
+									input={practice.input as { statement: string; options?: unknown }}
 									expanded={expanded}
 									onExpand={() => {
 										setExpanded(true);

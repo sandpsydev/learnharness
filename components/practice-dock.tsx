@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { joinDictation, useDictationTarget } from "@/components/dictation";
 import { useEnterSubmits } from "@/components/enter-submits";
 import { cn } from "@/lib/utils";
+import { PracticeOptionList } from "@/components/practice-options";
+import { practiceOptionsOf, type PracticeOptionLetter } from "@/src/core";
 
 /**
  * The practice dock (practice sessions, owner design 2026-10-04): an
@@ -14,16 +16,17 @@ import { cn } from "@/lib/utils";
  * morphs into the problem. The agent's statement above; the learner's
  * half below — "Your thinking", a labeled field with ONE Send button
  * (owner round 2, 2026-10-05): Enter sends, Shift+Enter makes a newline.
- * There are no lanes — whether a submission claims an answer is apparent
- * from the thinking itself; the agent reads it. One problem may carry
+ * Free response keeps one thinking lane. For MCQs, selecting an option
+ * then submitting labels the text as a claimed answer; thinking alone
+ * remains available for hints. One problem may carry
  * many submissions; each starts a turn.
  *
  * Collapse (scroll-up → slim bar) is owned by the DockOverlay; this
- * component is content only, and the expanded form stays MOUNTED while
- * collapsed (hidden) so a half-written trace survives scrolling.
+ * component is content only; its state survives collapsing so a
+ * half-written trace and option selection survive scrolling.
  *
  * The commitment (modelSolution, decisionPoints, …) rides the tool call's
- * arguments and is NOT rendered here — only the statement is the
+ * arguments and is NOT rendered here — only the statement and options are the
  * learner's. Esc dismisses the problem (the layered-Esc chain; the
  * confirm dialog then the silent route) — claimed by the page, not here.
  */
@@ -31,13 +34,13 @@ import { cn } from "@/lib/utils";
 export interface PracticeDockProps {
 	/** The active problem's tool-call id (submissions target it). */
 	problemCallId: string;
-	/** The pose's arguments — only the statement is the learner's (the
+	/** The pose's visible arguments (the
 	 *  mode badge would edge toward announcing the target; dropped). */
-	input: { statement: string };
+	input: { statement: string; options?: unknown };
 	/** Collapse state, owned by the DockOverlay. */
 	expanded: boolean;
 	onExpand: () => void;
-	/** text — POST {type:"thinking"} (one lane; the register is read from the text). */
+	/** POST {type:"thinking"}; selected options are labeled as claimed answers in text. */
 	onSubmit: (text: string) => void;
 	/** Escape in the thinking field stops dictation (threaded from the page). */
 	onEscape?: () => void;
@@ -50,6 +53,8 @@ export interface PracticeDockProps {
 
 export function PracticeDock({ problemCallId, input, expanded, onExpand, onSubmit, onEscape, compactionRunning = false }: PracticeDockProps) {
 	const [thinking, setThinking] = useState("");
+	const [selected, setSelected] = useState<PracticeOptionLetter | null>(null);
+	const options = practiceOptionsOf(input.options);
 	// Ref MIRRORS the field ("nothing gets lost", the question-dock
 	// discipline): a submit resuming after `await finishDictation()` reads
 	// the tail, never a stale closure.
@@ -70,10 +75,12 @@ export function PracticeDock({ problemCallId, input, expanded, onExpand, onSubmi
 	const submit = () => {
 		if (compactionRunning) return;
 		const text = thinkingRef.current.trim();
-		if (text.length === 0) return;
+		const answer = options && selected ? `Claimed answer: ${selected}. ${options[selected]}` : null;
+		if (!answer && text.length === 0) return;
 		thinkingRef.current = "";
 		setThinking("");
-		onSubmit(text);
+		setSelected(null);
+		onSubmit(answer ? `${answer}${text ? `\n\nYour thinking:\n${text}` : ""}` : text);
 	};
 
 	/* ENTER SUBMITS FROM ANYWHERE (owner round 6, 2026-10-05): dictation
@@ -110,6 +117,11 @@ export function PracticeDock({ problemCallId, input, expanded, onExpand, onSubmi
 				<div className="lh-prose text-[15px]">
 					<ToolContentResponse>{input.statement}</ToolContentResponse>
 				</div>
+				{options && <>
+					<PracticeOptionList options={options} selected={selected}
+						onSelect={(letter) => setSelected((previous) => previous === letter ? null : letter)} />
+					<p className="mt-2 text-xs text-muted-foreground">Select an option, then submit. Click it again to clear and send thinking only.</p>
+				</>}
 			</div>
 
 			{/* The learner's half: Enter SENDS (owner round 2, 2026-10-05);
@@ -160,11 +172,11 @@ export function PracticeDock({ problemCallId, input, expanded, onExpand, onSubmi
 					<Button
 						type="button"
 						data-testid="practice-send"
-						disabled={thinking.trim().length === 0 || compactionRunning}
+						disabled={((!options || !selected) && thinking.trim().length === 0) || compactionRunning}
 						onClick={() => submit()}
 						className="ml-auto h-9 rounded-[6px] px-3.5 text-sm font-medium"
 					>
-						Submit thinking
+						{options && selected ? "Submit answer" : "Submit thinking"}
 					</Button>
 				</div>
 			</div>

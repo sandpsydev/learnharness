@@ -25,6 +25,8 @@ import { createPortal } from "react-dom";
 
 import { ThinkingBlock } from "@/components/thinking-block";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
+import { PracticeOptionList } from "@/components/practice-options";
+import { PRACTICE_OPTION_LETTERS, practiceMcqOf, practiceOptionsOf } from "@/src/core";
 
 /* TARGET NAMES (owner round 17, 2026-10-06): targets are normalized to
  * opaque node ids at the record seam (owner round 9 — the mastery trace
@@ -60,14 +62,16 @@ export function ProblemCard({ part }: ArtifactPartProps) {
 	// statement — same container + eyebrow discipline as the answered card
 	// and the dock (which mirrors this in Slice D). The commitment never
 	// renders — only the call's statement.
-	const input = (part.input ?? {}) as { statement?: string };
+	const input = (part.input ?? {}) as { statement?: string; options?: unknown };
 	const statement = typeof input.statement === "string" ? input.statement : "";
+	const options = practiceOptionsOf(input.options);
 	return (
 		<div data-testid="problem-card" className="lh-card-enter my-1 rounded-xl border bg-card p-4">
 			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Problem</div>
 			<div className="lh-prose text-[15px]">
 				<ToolContentResponse>{statement}</ToolContentResponse>
 			</div>
+			{options && <PracticeOptionList options={options} />}
 		</div>
 	);
 }
@@ -105,6 +109,7 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 	const verdict = typeof input.verdict === "string" ? input.verdict : "";
 	const reveal =
 		typeof part.reveal === "string" ? part.reveal : typeof input.solutionReveal === "string" ? input.solutionReveal : "";
+	const mcq = practiceMcqOf(part.problemInput);
 
 	// The dismissal synthesis: no verdict, no reveal — one muted line (the
 	// learner clicked; the record needs only the fact).
@@ -148,6 +153,20 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 						</div>
 					</div>
 				</>
+			)}
+			{mcq && (
+				<section data-testid="mcq-reveal" className="mt-3 border-t pt-3">
+					<div className="mb-2 text-sm font-medium">Correct option: {mcq.correctOption}</div>
+					<div className="space-y-3">
+						{PRACTICE_OPTION_LETTERS.map((letter) => (
+							<div key={letter} className="text-sm">
+								<div className="mb-0.5 font-medium">{letter} — {letter === mcq.correctOption ? "Correct" : "Distractor"}</div>
+								<ToolContentResponse>{mcq.options[letter]}</ToolContentResponse>
+								<div className="mt-1 text-muted-foreground"><ToolContentResponse>{mcq.optionRationale[letter]}</ToolContentResponse></div>
+							</div>
+						))}
+					</div>
+				</section>
 			)}
 			<MetadataPopover
 				concludeInput={input}

@@ -438,7 +438,7 @@ export function modelSolutionForConclude(
 export function problemInputForConclude(
 	messages: readonly LhMessage[],
 	concludeCallId: string,
-): { statement?: unknown; mode?: unknown; target?: unknown; modelSolution?: unknown } | undefined {
+): { statement?: unknown; mode?: unknown; target?: unknown; modelSolution?: unknown; options?: unknown; correctOption?: unknown; optionRationale?: unknown } | undefined {
 	let mi = messages.findIndex(
 		(m) =>
 			(m as { role?: string }).role === "assistant" &&
@@ -457,7 +457,7 @@ export function problemInputForConclude(
 			if (block.type !== "toolCall" || block.name !== PRACTICE_PROBLEM_TOOL) continue;
 			if (!clean.has(block.id)) continue; // a refused pose revealed nothing
 			return (block.arguments ?? undefined) as
-				| { statement?: unknown; mode?: unknown; target?: unknown; modelSolution?: unknown }
+				| { statement?: unknown; mode?: unknown; target?: unknown; modelSolution?: unknown; options?: unknown; correctOption?: unknown; optionRationale?: unknown }
 				| undefined;
 		}
 	}

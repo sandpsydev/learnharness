@@ -223,6 +223,10 @@ describe("the source-derived segment list", () => {
 			for (const tier of ["**Settled**", "**Changing**", "**Conflict**"]) assert.ok(prompt.includes(tier));
 			assert.ok(prompt.includes("citations only on Changing-tier facts — never on settled science"));
 			assert.ok(prompt.includes("**unverified**"));
+			assert.ok(prompt.includes("a source actually read in this session"));
+			assert.ok(prompt.includes("has actually been read and supports the claim"));
+			assert.ok(prompt.includes("do not give it a normal citation tag"));
+			assert.ok(prompt.includes("unverified, from memory: ESC HF 2021"));
 			assert.ok(prompt.includes("Address the learner directly as **you/your**"));
 			assert.doesNotMatch(prompt, /\b(?:he|his|him|himself)\b/i);
 			assert.equal(prompt.includes("# Medical facts — amendment to the method"), kind === "teacher");
@@ -235,6 +239,8 @@ describe("the source-derived segment list", () => {
 		const practice = teacherAgent.composeInstructions("practice");
 		assert.ok(practice.includes("exactly 5 options, A–E"));
 		assert.ok(practice.includes("**Free-response next-step:**"));
+		assert.ok(practice.includes("Remembered guidance stays explicitly unverified"));
+		assert.ok(practice.includes("including in the hidden solution"));
 		assert.ok(practice.includes("Out of scope: lab/ECG/image interpretation, long-case MEQ"));
 	});
 

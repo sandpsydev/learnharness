@@ -21,6 +21,7 @@
  */
 
 import type { LhMessage } from "./native-messages.ts";
+import { PRACTICE_OPTION_LETTERS, practiceMcqOf, practiceOptionsOf } from "./practice-options.ts";
 import {
 	failedOutputCallIds,
 	PRACTICE_CONCLUDE_TOOL,
@@ -110,10 +111,15 @@ function toolResultBody(result: ToolResultMessage, ctx?: MarkdownContext): { hea
 	}
 
 	if (ctx !== undefined && result.toolName === PRACTICE_PROBLEM_TOOL) {
-		const statement = ctx.calls.get(result.toolCallId)?.args?.statement;
+		const args = ctx.calls.get(result.toolCallId)?.args;
+		const statement = args?.statement;
+		const options = practiceOptionsOf(args?.options);
 		return {
 			heading: "Problem",
-			body: [typeof statement === "string" && statement.trim() ? statement.trim() : "(no statement)"],
+			body: [
+				typeof statement === "string" && statement.trim() ? statement.trim() : "(no statement)",
+				...(options ? PRACTICE_OPTION_LETTERS.map((letter) => `${letter}. ${options[letter]}`) : []),
+			],
 		};
 	}
 
@@ -129,6 +135,13 @@ function toolResultBody(result: ToolResultMessage, ctx?: MarkdownContext): { hea
 		const input = problemInputForConclude(ctx.messages, result.toolCallId);
 		const solution = typeof input?.modelSolution === "string" && input.modelSolution.trim() ? input.modelSolution.trim() : undefined;
 		if (solution !== undefined) body.push(`> **Model solution**\n>\n> ${solution.replace(/\n/g, "\n> ")}`);
+		const mcq = practiceMcqOf(input);
+		if (mcq) {
+			body.push(`**Correct option: ${mcq.correctOption}**`);
+			body.push(...PRACTICE_OPTION_LETTERS.map((letter) =>
+				`**${letter}. ${mcq.options[letter]} — ${letter === mcq.correctOption ? "Correct" : "Distractor"}**\n\n${mcq.optionRationale[letter]}`,
+			));
+		}
 		return { heading: "Concluded", body };
 	}
 

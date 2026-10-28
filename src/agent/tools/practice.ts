@@ -28,6 +28,7 @@ import { activeProblemOf } from "../../core/native-messages.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { concludeResult, invalidInputResult, problemResult } from "../tool-execute.ts";
 import { healEncodedArguments, healToolRecord } from "./heal.ts";
+import { practiceMcqOf } from "../../core/practice-options.ts";
 
 
 /** The record-reading context the gates need (the plan-tools idiom). */
@@ -73,6 +74,14 @@ export function createPracticeGate(ctx: PracticeToolContext): PracticeGate {
 
 // ─── problem: the pose ───────────────────────────────────────────────────────
 
+const fiveOptionTexts = (description: string) => Type.Object({
+	A: Type.String({ minLength: 1 }),
+	B: Type.String({ minLength: 1 }),
+	C: Type.String({ minLength: 1 }),
+	D: Type.String({ minLength: 1 }),
+	E: Type.String({ minLength: 1 }),
+}, { additionalProperties: false, description });
+
 export const problemInputObject = Type.Object({
 	statement: Type.String({
 		description:
@@ -94,6 +103,11 @@ export const problemInputObject = Type.Object({
 	modelSolution: Type.String({
 		description: "REQUIRED — the full solution, moves in order, committed BEFORE the learner sees the problem. This IS the reveal — conclude shows it verbatim; never re-author it.",
 	}),
+	options: Type.Optional(fiveOptionTexts("For a single-best-answer MCQ: exactly five visible option texts, keyed A through E (markdown + LaTeX). Keep statement to the stem. Include correctOption and optionRationale together with options; omit all three for free response.")),
+	correctOption: Type.Optional(Type.Union([
+		Type.Literal("A"), Type.Literal("B"), Type.Literal("C"), Type.Literal("D"), Type.Literal("E"),
+	], { description: "The one best option letter, committed before posing. HIDDEN until conclude, like modelSolution." })),
+	optionRationale: Type.Optional(fiveOptionTexts("Rationales keyed A through E: why the best option is correct and why each distractor is wrong. Commit all five before posing. HIDDEN until conclude, like modelSolution.")),
 });
 
 export type ProblemInput = Static<typeof problemInputObject>;
@@ -109,7 +123,9 @@ export function problemTool(
 			"Pose one practice problem. Ends the turn — the learner works in the thinking field; their thinking " +
 			"traces and answer commits arrive back as labeled messages. The modelSolution rides this call's " +
 			"arguments and stays hidden from the learner until you conclude (conclude shows it verbatim — the " +
-			"reveal needs no new field). Only one problem may be active — conclude it before posing the next.",
+			"reveal needs no new field). MCQs add visible options A–E plus hidden correctOption and optionRationale; " +
+			"Submit sends a selected option and thinking as a claimed answer, without automatic grading. " +
+			"Only one problem may be active — conclude it before posing the next.",
 		parameters: problemInputObject,
 		executionMode: "sequential",
 		prepareArguments: (args: unknown) => {
@@ -141,6 +157,12 @@ export function problemTool(
 			if (gate.problemActive) {
 				return invalidInputResult("problem", [
 					"a problem is already active — call conclude on it before posing the next one",
+				]);
+			}
+			if ([input.options, input.correctOption, input.optionRationale].some((field) => field !== undefined)
+				&& !practiceMcqOf(input)) {
+				return invalidInputResult("problem", [
+					"MCQs require options and optionRationale with exactly five non-empty texts keyed A–E, and correctOption must be A, B, C, D, or E; omit all three fields for free response",
 				]);
 			}
 			// TARGET VALIDATION (owner round 9, round 12): against the WHOLE

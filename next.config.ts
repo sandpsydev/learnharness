@@ -12,6 +12,11 @@ const nextConfig: NextConfig = {
 	// The manual copies the docs require — public/ and .next/static — are
 	// done by scripts/build-server.mjs.
 	output: "standalone",
+	// Library imports upload whole textbooks through /api/library/*. With a
+	// proxy in play Next buffers each request body up to this size and
+	// silently TRUNCATES anything bigger (default 10MB) — a 200MB textbook
+	// would arrive cut off. Raise the ceiling; single-user, local machine.
+	experimental: { proxyClientMaxBodySize: "600mb" },
 	// SAFETY (empirically verified 2026-09-17): without this, output file
 	// tracing sweeps the repo's real data/ — chat records, graph ledgers —
 	// INTO the standalone bundle. A shipped desktop app would carry the
@@ -81,6 +86,12 @@ const nextConfig: NextConfig = {
 			// Wave E stage 2: resvg rasterizes visual-maker SVGs natively; same
 			// per-platform-binary story as the canvas above (one per build).
 			"node_modules/@resvg/resvg-js-*/**/*",
+			// Library (medical fork): the local embedding model runs on
+			// onnxruntime-node. Its binding + dylib are picked by a runtime path
+			// built from process.platform/arch — invisible to the tracer. Builds
+			// run per-OS, so this names exactly the current platform's folder.
+			"node_modules/onnxruntime-node/dist/**/*",
+			`node_modules/onnxruntime-node/bin/napi-v6/${process.platform}/${process.arch}/**/*`,
 			"node_modules/@earendil-works/pi-ai/dist/providers/data/**/*",
 			// Public native OAuth factories load these flows through variable imports.
 			// Electron main uses the same standalone SDK; the offline runtime gate
@@ -107,6 +118,7 @@ const nextConfig: NextConfig = {
 		"pdfjs-dist", // sources v0: bundling breaks its node fake-worker path
 		"@napi-rs/canvas", // native binding — bundling breaks the .node require
 		"@resvg/resvg-js", // native binding — same
+		"onnxruntime-node", // native binding — local embedding model (library)
 	],
 };
 

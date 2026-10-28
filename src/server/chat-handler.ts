@@ -33,6 +33,7 @@ import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
 import { providerKeyPresent } from "./keys.ts";
+import { library } from "./library.ts";
 import {
 	extractionEnabled,
 	graphToolsEnabled,
@@ -418,6 +419,12 @@ export async function handleChatInput(
 		},
 		restoreAutomatic: (automaticIds, retainedIds) => restoreUncommittedAutomatic(chatId, constructed, automaticIds, retainedIds),
 	});
+	// The learner's PDF library (medical fork, Phase 6): library_search /
+	// library_read join every agent's registry while the library holds at
+	// least one searchable book — read fresh per turn, so an import lands
+	// on the very next message.
+	const libraryContext = library.toolContext();
+	const libraryTools = libraryContext ? { library: libraryContext } : {};
 	const agentOpts: AgentBuildOptions = {
 		engine,
 		callPurpose,
@@ -461,6 +468,9 @@ export async function handleChatInput(
 							searchAvailable,
 						},
 						...(graphToolsEnabled(effective) ? { graph: { chatStore: stores.chatStore, graphStore: stores.graphStore } } : {}),
+						// The learner's PDF library (medical fork): present only
+						// when at least one book is searchable.
+						...libraryTools,
 					},
 					agentOpts,
 				)
@@ -474,6 +484,7 @@ export async function handleChatInput(
 						// The registry drop's signal (2026-09-20): no live engine
 						// = no research tool in the teacher's registry.
 						searchAvailable,
+						...libraryTools,
 					},
 					agentOpts,
 				)
@@ -492,6 +503,7 @@ export async function handleChatInput(
 						// knowledge graph through tools when the gate opens —
 						// graph master switch AND the agent.graphTools toggle.
 						...(graphToolsEnabled(effective) ? { graphStore: stores.graphStore } : {}),
+						...libraryTools,
 					},
 					agentOpts,
 				);

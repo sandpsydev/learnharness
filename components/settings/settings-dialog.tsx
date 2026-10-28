@@ -50,6 +50,7 @@ import { KeysSection } from "./keys-section.tsx";
 import { Hint } from "@/components/ui/hint";
 import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
+import { LibrarySection } from "./library-section.tsx";
 import { ChatGPTUIProvider } from "./chatgpt-connection.tsx";
 import { NativeSubscriptionUIProvider } from "./subscription-connections.tsx";
 
@@ -59,6 +60,7 @@ import { NativeSubscriptionUIProvider } from "./subscription-connections.tsx";
 const SECTIONS = [
 	{ id: "keys", label: "Providers" },
 	{ id: "agent", label: "Agent" },
+	{ id: "library", label: "Library" },
 	{ id: "appearance", label: "Appearance" },
 	{ id: "graph", label: "Graph" },
 	{ id: "keyboard", label: "Keyboard", hint: "Stored on this device" },
@@ -393,6 +395,14 @@ export function SettingsDialogBody({
 											void write("compaction", next)
 										}
 									/>
+								</SettingsSection>
+							)}
+							{active === "library" && (
+								<SettingsSection
+									title="Library"
+									testid="section-library"
+								>
+									<LibrarySection />
 								</SettingsSection>
 							)}
 							{active === "appearance" && (

@@ -25,6 +25,8 @@ import type {
 	SessionCheckpoint,
 	TurnUsage,
 	NotesSource,
+	LibraryBook,
+	LibraryChunk,
 } from "./contracts.ts";
 import type { UserSettings } from "./settings.ts";
 
@@ -222,3 +224,42 @@ export interface AuthStore {
 	deleteAuthVar(name: string): void;
 }
 
+
+// ─── LibraryStore — the PDF library (data/library, medical fork Phase 6) ────
+
+/** What a new book needs from the importer; the store allocates the id and
+ *  fills the index-state fields (status "indexing", no chunks yet). */
+export type NewLibraryBook = Pick<
+	LibraryBook,
+	"kind" | "title" | "fileName" | "pageCount" | "mode" | "toc" | "visionPages"
+> &
+	Partial<Pick<LibraryBook, "course" | "note">>;
+
+/**
+ * One directory per book: the copied PDF (so moving or renaming the original
+ * never breaks a citation), the SlideScribe note when there is one, the
+ * chunks, and the vectors. Reader-side ranking (keyword + meaning) lives in
+ * core/library.ts — the store only persists.
+ */
+export interface LibraryStore {
+	/** Every book, newest import first. */
+	listBooks(): LibraryBook[];
+	getBook(id: string): LibraryBook | null;
+	/** Copy the PDF (and note) into the library and create the record. */
+	createBook(init: NewLibraryBook, files: { pdf: Uint8Array; note?: string }): LibraryBook;
+	/** Merge a patch (identity fields are immutable); null for an unknown id. */
+	updateBook(id: string, patch: Partial<Omit<LibraryBook, "id" | "kind" | "importedAt">>): LibraryBook | null;
+	/** Absolute path of the library's own copy of the PDF. */
+	pdfPath(id: string): string;
+	/** The copied SlideScribe note's Markdown, or null. */
+	readNote(id: string): string | null;
+	readChunks(id: string): LibraryChunk[];
+	writeChunks(id: string, chunks: readonly LibraryChunk[]): void;
+	/** Row-major unit vectors, one row per chunk; null removes them. */
+	writeVectors(id: string, vectors: Float32Array | null): void;
+	readVectors(id: string, dim: number): { vectors: Float32Array; dim: number } | null;
+	/** Changes whenever the book's chunks or vectors change — the search cache key. */
+	fingerprint(id: string): string;
+	/** Remove the book and every file of it. */
+	deleteBook(id: string): boolean;
+}

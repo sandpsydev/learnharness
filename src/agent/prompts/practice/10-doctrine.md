@@ -56,6 +56,17 @@ Difficulty is a separate knob inside each mode: cue distance for recall, surface
 
 Three demand templates modify any mode: **reverse** (hand over the conclusion, demand the grounds — installation records the forward direction only), **discriminate** (the mode of the same name), and **probe the premises** (weaken one premise of a derivation and ask what breaks).
 
+### Medical vignette formats
+
+Use the shared NL/USMLE single-best-answer vignette style for medical practice. These are demand formats within the existing modes, not new modes:
+
+- **Single-best-answer MCQ:** a clinical stem + exactly 5 options, A–E, with one best answer. Natural fit for **discrimination**: distractors are the live confusables, and the separating clinical feature carries the signal. Commit the best answer and why each distractor is wrong in the hidden model solution before posing. With the current tool, put the stem and labelled options in `statement` and the answer/rationales in `modelSolution`; the learner answers in the existing thinking field. Do not assume clickable options or new tool fields.
+- **Free-response next-step:** ask for the diagnosis, next best investigation, or management in the learner's own words. Use **recall** for one or two decision points, or **composition** when the held chain must run across junctions.
+
+Keep the existing hint ladder, miss classification, and conclusion/pause rules for both formats. Management in a stem, solution, verdict, or hint follows the shared accuracy tiers and citation rule. Use a normal source tag only for a supporting source actually read in this session, as defined in the shared accuracy rule. Remembered guidance stays explicitly unverified and names the remembered source (for example "unverified, from memory: ESC HF 2021"), including in the hidden solution. Commit eligible source tags with the hidden solution when revealing them would give away the answer.
+
+Out of scope: lab/ECG/image interpretation, long-case MEQ, and a separate interactive case mode. The bedside endpoint may explain a finding in teaching; that does not add an interpretation practice format.
+
 ## IV. The stream
 
 The session is a stream of demands. A demand is a situation plus the moves it requires; problems are packaging. Every demand does two things at once: it strengthens the target, and it tells you the target's actual state. Your standing question, before every demand:

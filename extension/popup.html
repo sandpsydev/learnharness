@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>LearnHarness Medical</title><link rel="stylesheet" href="style.css"></head>
+<body class="popup"><header><h1>LearnHarness Medical</h1><button id="settings">Settings</button></header>
+<p class="note">Expert AI page controls await owner verification. Manual copy and paste-back are available. Review prompts for personal data before sending.</p>
+<p id="notice" role="status" aria-live="polite"></p>
+<div class="row"><button id="refresh">Refresh queue</button><span id="connection"></span></div>
+<section id="active" hidden><h2>Current question</h2><p id="phase"></p><p id="prompt" class="prompt"></p><button id="copy-prompt">Copy prompt</button><button id="release">Release current question</button>
+<p class="note">To paste manually: start a new conversation first and keep Standard mode. Release keeps the app entry; it does not dismiss it. Save your answer before releasing.</p>
+<form id="answer-form"><label for="answer">Paste the completed answer</label><textarea id="answer" rows="6" maxlength="60000" required></textarea>
+<label for="source">Answer page URL (optional)</label><input id="source" type="url">
+<label for="references">Reference URLs (one per line, optional)</label><textarea id="references" rows="3"></textarea>
+<button type="submit">Send to LearnHarness</button><button id="send-next" type="button">Send &amp; ask next</button></form></section>
+<section><h2>Question queue</h2><div id="queue"></div></section>
+<details id="highlight-details"><summary>Send a highlight or PDF passage manually</summary><p>Goes to your most recently active teaching session. On a web page or PDF, you can also select text and right-click → Send to LearnHarness.</p>
+<form id="highlight-form"><label for="highlight">Selected text</label><textarea id="highlight" rows="4" maxlength="20000" required></textarea><label for="highlight-url">Original page or PDF URL</label><input id="highlight-url" type="url" required><label for="highlight-title">Title (optional)</label><input id="highlight-title"><button type="submit">Send highlight</button></form></details>
+<script src="popup.js"></script></body></html>

@@ -3,7 +3,8 @@ import type { VerifyReference } from "../src/core/contracts/verify";
 
 /**
  * Expert AI selectors from the owner's 2026-10-29 logged-in page inspection.
- * No live page was opened, fetched, read, or automated by this agent.
+ * Closed pop-up shell structure was confirmed by a read-only, owner-approved
+ * inspection on 2026-10-29.
  * Completion uses the copy action bar: the best available signal, since no
  * mid-answer capture exists. A timeout/manual fallback remains in content.ts.
  * Sources come from the owner-inspected drawer. Inline citation IDs have no
@@ -41,6 +42,12 @@ function shown(element: Element | null): element is HTMLElement {
   if (view?.getComputedStyle && element.getClientRects().length === 0) return false;
   return true;
 }
+function popupShown(shell: Element): boolean {
+  // Closed shells can still have a full-width, zero-height client rectangle.
+  // An open dialog may overflow that shell, so check its descendants as well.
+  return [shell, ...shell.querySelectorAll("*")].some((element) =>
+    shown(element) && [...element.getClientRects()].some((rect) => rect.width > 0 && rect.height > 0));
+}
 function enabled(element: Element | null): element is HTMLElement {
   return shown(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true";
 }
@@ -48,8 +55,8 @@ export function requireVisible(doc: Document) {
   if (doc.visibilityState !== "visible" || !doc.hasFocus()) throw new Error("Keep the Expert AI tab visible and its window focused, then retry.");
 }
 export function questionBox(doc: Document): HTMLElement {
-  if ([...doc.querySelectorAll(EXPERT_PAGE.access)].some(shown)) throw new Error(ACCESS_HELP);
-  if ([...doc.querySelectorAll(EXPERT_PAGE.popup)].some(shown)) throw new Error("Close the Expert AI pop-up, then retry.");
+  if ([...doc.querySelectorAll(EXPERT_PAGE.access)].some(popupShown)) throw new Error(ACCESS_HELP);
+  if ([...doc.querySelectorAll(EXPERT_PAGE.popup)].some(popupShown)) throw new Error("Close the Expert AI pop-up, then retry.");
   const box = [...doc.querySelectorAll<HTMLElement>(EXPERT_PAGE.question)].find(enabled);
   if (!box) throw new Error(ACCESS_HELP);
   return box;

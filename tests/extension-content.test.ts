@@ -21,6 +21,10 @@ async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverS
   const { document, Event: FixtureEvent } = parseHTML(fixture);
   Object.defineProperty(document, "visibilityState", { value: "visible" });
   document.hasFocus = () => true;
+  // Closed shells still have a browser client rectangle, but no height.
+  document.querySelectorAll<HTMLElement>(".ec-modal").forEach((shell) => {
+    shell.getClientRects = () => [{ width: 948, height: 0 }] as unknown as DOMRectList;
+  });
   const box = document.querySelector<HTMLElement>('[contenteditable="true"]')!;
   if (options.neverFresh) { box.textContent = "Old question"; box.setAttribute("data-empty", "false"); }
   box.addEventListener("input", () => {

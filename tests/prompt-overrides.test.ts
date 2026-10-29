@@ -238,6 +238,8 @@ describe("the source-derived segment list", () => {
 		assert.ok(teacher.includes("Never invent a rationale"));
 		assert.ok(teacher.includes("mark it [memorise]"));
 		assert.ok(teacher.includes("Suggest it for Anki export"));
+		assert.ok(teacher.includes("When teaching from the learner's imported book and citing that passage, you may repeat the book's own first-letter acronym mnemonic"));
+		assert.ok(teacher.includes("the mnemonic policy in `06-medical-facts.md` still forbids inventing your own first-letter acronyms"));
 		const practice = teacherAgent.composeInstructions("practice");
 		assert.ok(practice.includes("exactly 5 options, A–E"));
 		assert.ok(practice.includes("**Free-response next-step:**"));

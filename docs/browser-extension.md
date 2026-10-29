@@ -2,13 +2,14 @@
 
 A Manifest V3 extension for Chrome and Chromium browsers (Edge, Brave, Arc),
 kept in `extension/`. It speaks only to the paired loopback API described in
-[verify-api.md](verify-api.md). No app-side API changes are needed.
+[verify-api.md](verify-api.md). Run the matching app version to accept topic
+citations that have titles and sections without URLs.
 
-**Expert AI page controls are not live-verified.** This build never opened,
-fetched, read, or automated the live site. The page adapter uses deliberately
-unverified placeholders; automatic submission will fail closed until the owner
-inspects the logged-in page and updates `extension/expert-page.ts`. The manual
-copy/paste route and selection capture work independently of that adapter.
+The page adapter uses the owner's 2026-10-29 inspection of the fresh screen,
+answered conversation, and sources drawer. This implementation was tested only
+against reconstructed local fixtures; no agent opened or read the live site.
+The copy action bar is the best available completion signal, but it has not
+been checked against a mid-answer capture. Manual copy/paste remains available.
 
 ## Load it in Chrome
 
@@ -33,10 +34,9 @@ Brave also support loading unpacked extensions; Arc uses Chrome's extension UI.
   question and its exact prompt goes to the clipboard. In your own visible,
   logged-in Expert AI tab, start **New conversation**, keep **Standard**, paste,
   and submit yourself. Paste the completed answer into the popup, add reference
-  URLs (one per line) and the answer page URL, then choose **Send to LearnHarness**.
+  titles/sections or URLs (one per line) and the answer page URL, then choose **Send to LearnHarness**.
 - **Send & ask next** returns this answer, then attempts the next queued question
-  from the same learner action. With the placeholder adapter, it copies that next
-  prompt and offers the manual route. A normal send starts no further query.
+  from the same learner action. A normal send starts no further query.
 - Select text on a guideline, paper, or browser PDF, right-click, then choose
   **Send to LearnHarness**. The context menu passes only the selected text, page
   URL and title. It uses `activeTab`; it does not inject a content script into
@@ -56,19 +56,30 @@ Brave also support loading unpacked extensions; Arc uses Chrome's extension UI.
   It does not dismiss or delete the app queue entry. Copy any unsent answer first.
   Use it after closing a question tab or to deliberately retry an uncertain send.
 
-## Ask/return controls after owner verification
+## Ask and return controls
 
 Click **Ask in Expert AI** or use **Ctrl+Shift+L on Mac**, **Alt+Shift+L elsewhere**
 (change it at `chrome://extensions/shortcuts` if it conflicts). The extension
 focuses an existing Expert AI tab or opens a visible one. It starts a new
 conversation, fills one prompt, submits it, and marks it asked in LearnHarness.
-It never changes the response-mode dropdown. The learner must leave the tab and
+Before filling, it checks that the response mode reads **Standard** and asks
+you to switch it yourself if needed. It never changes the dropdown. The learner must leave the tab and
 window visible/focused during fill/send. Sign-in/access screens leave the item
-queued and give the sign-in/university-network message.
+queued and give the sign-in/university-network message. Visible welcome,
+disclaimer or dosing popups ask you to close the popup and retry. The extension
+waits up to ten seconds for the fresh screen and send button.
 
 When a completed answer appears, **Send to LearnHarness** and **Send & ask next**
 appear beside it. Nothing is returned until a real learner click. Only the current
-question's tab/request can return its answer. A local binding and a mutation lock
+question's tab/request can return its answer. During your Send click, it reads
+the answer's sources drawer, opening it if needed and restoring its previous
+open/closed state. Topic sources are sent by title and section; links and
+PMIDs/DOIs are kept when present. It does not open individual source cards.
+Inline source numbers are omitted because their mapping to drawer cards is
+unknown. Drug names remain in the answer; suggested questions, source pills,
+thinking details and disclaimers are excluded. If completion is not detected
+within two minutes, a message points to manual paste-back without resubmitting.
+A local binding and a mutation lock
 prevent overlapping questions, duplicate clicks and stale-answer returns. A lost
 submission acknowledgement is treated as uncertain and never automatically
 retried. An API failure after successful submission leaves the binding intact;
@@ -81,23 +92,21 @@ an external page. All app fetches, including highlights, originate in the servic
 worker with the Bearer token. Page scripts never receive that token, and the
 extension does not accept external messages.
 
-## Tests and the later owner step
+## Local tests and first live try
 
-`npm run lint`, `npm run typecheck`, and `npm test` cover extension source and its
-local-only tests. `npm run extension:build` bundles five entry points and copies
-the manifest, HTML and CSS into ignored `dist/extension`. The test suite also
-builds a temporary extension and checks that its entry points and assets exist.
-No browser account, live site, API key, or network connection is used in tests.
+`npm run lint`, `npm run typecheck`, and `npm test` cover the extension and its
+local-only tests. The suite builds a temporary unpacked extension and checks
+its assets. The fixtures under `tests/fixtures/extension/` reconstruct the
+inspected structure with generic content; they contain no captured questions,
+answers, source titles, conversation IDs, message IDs or nudge values. Tests
+need no external network, accounts or keys.
 
-`tests/fixtures/extension/expert-ai.html` is a fictional minimal page based only
-on the spec's written screenshot description. It is not captured site HTML.
-Tests exercise fresh-conversation order, unchanged mode, missing/access/hidden
-controls, completed-answer/reference extraction, one-at-a-time state, next-item
-chaining, offline recovery, manual return, pairing and highlights.
-
-The owner-present inspection is a separate held step. Its seam is
-`extension/expert-page.ts`: replace and verify the question box, new-conversation
-control, submit arrow, answer/completion markers, references, access detection,
-and fresh-conversation readiness signals there. Confirm the textarea input events
-against the actual UI. Keep the content-script match restricted to
-`https://ai.uptodate.com/*`. Do not use an AI agent to perform that inspection.
+For the learner's first live try, load the extension as above, choose a generic
+queued question, and click **Ask in Expert AI**. Confirm a new conversation opens
+in Standard mode with the exact prompt. Note whether **Send to LearnHarness**
+appears before the answer has finished streaming; the copy-button completion
+signal still needs that check. After reading the finished answer, send it and
+confirm that the app receives its text plus source titles and sections. Try
+sending with the sources drawer both closed and already open; its state should
+be preserved. Use manual paste-back if the page layout differs. This live check
+must be done by the learner, never by an AI browser agent.

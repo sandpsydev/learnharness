@@ -7,8 +7,9 @@ import type { VerifyReference } from "../src/core/contracts/verify";
  * inspection on 2026-10-29.
  * Completion uses the copy action bar: the best available signal, since no
  * mid-answer capture exists. A timeout/manual fallback remains in content.ts.
- * Sources come from the owner-inspected drawer. Inline citation IDs have no
- * verified mapping to drawer cards, so only source titles/sections are sent.
+ * Sources use the drawer or right pane confirmed by the owner-approved
+ * 2026-10-30 read-only check. Inline citation IDs have no verified mapping
+ * to source cards, so only source titles/sections are sent.
  */
 export const EXPERT_PAGE = {
   question: '[data-e2e="desktop-send-input-editor"][contenteditable="true"]',
@@ -22,6 +23,9 @@ export const EXPERT_PAGE = {
   sourcesButton: '[data-e2e="assistant-message-action-bar"] button[class*="sources-button_"]',
   drawer: '[data-e2e="fab-expy-sources-drawer"]',
   sourceCards: '[data-e2e="drawer-content"] ul[data-e2e="fab-expy-sources-list"] li button[data-e2e="fab-expy-source-card-button"]',
+  rightPane: '[data-e2e="right-content-pane-slide-container"]',
+  rightPaneCards: 'ul[data-e2e="fab-expy-sources-list"] li button[data-e2e="fab-expy-source-card-button"]',
+  rightPaneClose: 'button[data-e2e="right-content-pane-close-btn"]',
   drawerClose: 'button[data-e2e="drawer-close-btn"]',
   access: '.ec-signout-modal, .ec-unauthorized-modal',
   popup: '.ec-disclaimer-modal, .ec-drug-dosing-agreement-modal, .ec-welcome-modal',
@@ -130,8 +134,15 @@ export function conversationIsFresh(doc: Document): boolean {
 }
 export function canSubmit(doc: Document): boolean { return enabled(submitFor(questionBox(doc))); }
 
-function visibleDrawer(doc: Document): HTMLElement | undefined {
-  return [...doc.querySelectorAll<HTMLElement>(EXPERT_PAGE.drawer)].find(shown);
+function visibleSourcesPanel(doc: Document) {
+  const layouts = [
+    { selector: EXPERT_PAGE.rightPane, cards: EXPERT_PAGE.rightPaneCards, close: EXPERT_PAGE.rightPaneClose },
+    { selector: EXPERT_PAGE.drawer, cards: EXPERT_PAGE.sourceCards, close: EXPERT_PAGE.drawerClose },
+  ];
+  for (const layout of layouts) {
+    const element = [...doc.querySelectorAll<HTMLElement>(layout.selector)].find(shown);
+    if (element) return { element, ...layout };
+  }
 }
 async function waitForPage<T>(doc: Document, check: () => T | undefined, timeout = 10_000): Promise<T> {
   const deadline = Date.now() + timeout;
@@ -143,8 +154,8 @@ async function waitForPage<T>(doc: Document, check: () => T | undefined, timeout
   }
   throw new Error("Expert AI sources drawer did not respond. Use manual paste-back for the answer and sources.");
 }
-function drawerReferences(drawer: HTMLElement, sourceUrl: string): VerifyReference[] {
-  return [...drawer.querySelectorAll<HTMLElement>(EXPERT_PAGE.sourceCards)].map((card) => {
+function panelReferences(panel: HTMLElement, cards: string, sourceUrl: string): VerifyReference[] {
+  return [...panel.querySelectorAll<HTMLElement>(cards)].filter(shown).map((card) => {
     const title = card.querySelector('[class*="source-text-line--topic-ti"]')?.textContent?.trim()
       || card.getAttribute("aria-label")?.replace(/^View source:\s*/i, "").trim();
     if (!title) throw new Error("Expert AI source title was unavailable. Use manual paste-back.");
@@ -161,36 +172,38 @@ function drawerReferences(drawer: HTMLElement, sourceUrl: string): VerifyReferen
   });
 }
 /** Called only within the learner's own Send click. Read cards without opening
- * individual sources, then restore whether the drawer was open or closed. */
+ * individual sources, then restore whether the sources panel was open or closed. */
 export async function readAnswerWithSources(container: HTMLElement, sourceUrl: string) {
   const doc = container.ownerDocument;
   requireVisible(doc);
-  questionBox(doc); // Access/pop-up check before opening the drawer.
+  questionBox(doc); // Access/pop-up check before opening sources.
   const button = container.querySelector(EXPERT_PAGE.sourcesButton);
   if (!enabled(button)) throw new Error("Expert AI sources control was unavailable. Use manual paste-back.");
-  const wasOpen = Boolean(visibleDrawer(doc));
+  const wasOpen = Boolean(visibleSourcesPanel(doc));
   if (wasOpen && button.getAttribute("aria-pressed") !== "true") {
     throw new Error("Close the other answer's sources drawer, then retry sending this answer.");
   }
   let opened = false;
   try {
     if (!wasOpen) { opened = true; button.click(); }
-    const drawer = await waitForPage(doc, () => {
-      const current = visibleDrawer(doc);
-      return button.getAttribute("aria-pressed") === "true" && current?.querySelector(EXPERT_PAGE.sourceCards) ? current : undefined;
+    const panel = await waitForPage(doc, () => {
+      const current = visibleSourcesPanel(doc);
+      return button.getAttribute("aria-pressed") === "true" && current
+        && [...current.element.querySelectorAll(current.cards)].some(shown) ? current : undefined;
     });
-    const references = drawerReferences(drawer, sourceUrl);
+    const references = panelReferences(panel.element, panel.cards, sourceUrl);
     if ([...doc.querySelectorAll(EXPERT_PAGE.answer)].at(-1) !== container || !container.isConnected) throw new Error("The answer changed. Read it again before sending.");
     return { ...readAnswer(container, sourceUrl), references };
   } finally {
     if (opened) {
-      const close = visibleDrawer(doc)?.querySelector(EXPERT_PAGE.drawerClose);
-      if (visibleDrawer(doc) && !close) throw new Error("Close the sources drawer and retry sending the answer.");
+      const panel = visibleSourcesPanel(doc);
+      const close = panel?.element.querySelector(panel.close);
+      if (panel && !close) throw new Error("Close the sources drawer and retry sending the answer.");
       if (close) {
         requireVisible(doc);
         if (!enabled(close)) throw new Error("Close the sources drawer and retry sending the answer.");
         close.click();
-        await waitForPage(doc, () => visibleDrawer(doc) ? undefined : true);
+        await waitForPage(doc, () => visibleSourcesPanel(doc) ? undefined : true);
       }
     }
   }

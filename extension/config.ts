@@ -3,6 +3,7 @@ export const DEFAULT_CONFIG: Config = {
   appUrl: "http://127.0.0.1:47615",
   expertUrl: "https://ai.uptodate.com/?dpRedirect=false",
   token: "",
+  automatic: true,
 };
 export function isExpertUrl(value: string): boolean {
   try { return new URL(value).origin === "https://ai.uptodate.com"; } catch { return false; }
@@ -19,7 +20,7 @@ export function validateConfig(input: Config): Config {
   }
   const token = input.token.trim();
   if (/[\r\n]/.test(token)) throw new Error("Pairing token must be a single line.");
-  return { appUrl: app.origin, expertUrl: expert.href, token };
+  return { appUrl: app.origin, expertUrl: expert.href, token, automatic: input.automatic !== false };
 }
 export function httpUrl(value: string): boolean {
   try { return ["http:", "https:"].includes(new URL(value).protocol); } catch { return false; }

@@ -69,8 +69,8 @@ function submitFor(box: HTMLElement): Element | null {
   // Desktop and mobile have separate forms; never send through the hidden copy.
   return box.closest("form")?.querySelector(EXPERT_PAGE.submit) ?? null;
 }
-export function startConversation(doc: Document) {
-  requireVisible(doc);
+export function startConversation(doc: Document, automatic = false) {
+  if (!automatic) requireVisible(doc);
   const box = questionBox(doc);
   const fresh = [...doc.querySelectorAll(EXPERT_PAGE.newConversation)].find(enabled)
     ?? [...doc.querySelectorAll(EXPERT_PAGE.sidebarNewConversation)].find(enabled);
@@ -79,8 +79,8 @@ export function startConversation(doc: Document) {
   }
   fresh.click();
 }
-export function fillQuestion(doc: Document, prompt: string) {
-  requireVisible(doc);
+export function fillQuestion(doc: Document, prompt: string, automatic = false) {
+  if (!automatic) requireVisible(doc);
   const box = questionBox(doc);
   if (!conversationIsFresh(doc)) throw new Error("Wait for an empty new conversation before filling the prompt. Use manual paste-back if needed.");
   const mode = box.closest("form")?.querySelector('[data-e2e="output-mode-menu-trigger"]');
@@ -101,8 +101,8 @@ export function fillQuestion(doc: Document, prompt: string) {
   const InputEventClass = doc.defaultView?.InputEvent ?? InputEvent;
   box.dispatchEvent(new InputEventClass("input", { bubbles: true, inputType: "insertText", data: prompt }));
 }
-export function submitQuestion(doc: Document) {
-  requireVisible(doc);
+export function submitQuestion(doc: Document, automatic = false) {
+  if (!automatic) requireVisible(doc);
   const submit = submitFor(questionBox(doc));
   if (!enabled(submit)) throw new Error("Expert AI submit control is unavailable. Copy the prompt and paste it manually.");
   submit.click();
@@ -144,10 +144,10 @@ function visibleSourcesPanel(doc: Document) {
     if (element) return { element, ...layout };
   }
 }
-async function waitForPage<T>(doc: Document, check: () => T | undefined, timeout = 10_000): Promise<T> {
+async function waitForPage<T>(doc: Document, check: () => T | undefined, automatic = false, timeout = 10_000): Promise<T> {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    requireVisible(doc);
+    if (!automatic) requireVisible(doc);
     const value = check();
     if (value !== undefined) return value;
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -171,11 +171,11 @@ function panelReferences(panel: HTMLElement, cards: string, sourceUrl: string): 
     return { title, ...(section ? { section } : {}), ...(type ? { type } : {}), ...(url ? { url } : {}), ...(ids.pmids[0] ? { pmid: ids.pmids[0] } : {}), ...(ids.dois[0] ? { doi: ids.dois[0] } : {}) };
   });
 }
-/** Called only within the learner's own Send click. Read cards without opening
- * individual sources, then restore whether the sources panel was open or closed. */
-export async function readAnswerWithSources(container: HTMLElement, sourceUrl: string) {
+/** Read cards without opening individual sources, then restore the panel state.
+ * Automatic runs are permitted only in the extension-managed tab. */
+export async function readAnswerWithSources(container: HTMLElement, sourceUrl: string, automatic = false) {
   const doc = container.ownerDocument;
-  requireVisible(doc);
+  if (!automatic) requireVisible(doc);
   questionBox(doc); // Access/pop-up check before opening sources.
   const button = container.querySelector(EXPERT_PAGE.sourcesButton);
   if (!enabled(button)) throw new Error("Expert AI sources control was unavailable. Use manual paste-back.");
@@ -190,7 +190,7 @@ export async function readAnswerWithSources(container: HTMLElement, sourceUrl: s
       const current = visibleSourcesPanel(doc);
       return button.getAttribute("aria-pressed") === "true" && current
         && [...current.element.querySelectorAll(current.cards)].some(shown) ? current : undefined;
-    });
+    }, automatic);
     const references = panelReferences(panel.element, panel.cards, sourceUrl);
     if ([...doc.querySelectorAll(EXPERT_PAGE.answer)].at(-1) !== container || !container.isConnected) throw new Error("The answer changed. Read it again before sending.");
     return { ...readAnswer(container, sourceUrl), references };
@@ -200,10 +200,10 @@ export async function readAnswerWithSources(container: HTMLElement, sourceUrl: s
       const close = panel?.element.querySelector(panel.close);
       if (panel && !close) throw new Error("Close the sources drawer and retry sending the answer.");
       if (close) {
-        requireVisible(doc);
+        if (!automatic) requireVisible(doc);
         if (!enabled(close)) throw new Error("Close the sources drawer and retry sending the answer.");
         close.click();
-        await waitForPage(doc, () => visibleSourcesPanel(doc) ? undefined : true);
+        await waitForPage(doc, () => visibleSourcesPanel(doc) ? undefined : true, automatic);
       }
     }
   }

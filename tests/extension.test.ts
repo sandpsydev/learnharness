@@ -200,6 +200,18 @@ describe("extension page adapter (local fixture only)", () => {
       assert.equal(clicks, 0, scenario);
     }
   });
+  it("automatic focus relaxation preserves Standard and popup checks", () => {
+    const { document, box } = page();
+    Object.defineProperty(document, "visibilityState", { value: "hidden" });
+    document.hasFocus = () => false;
+    const mode = box.closest("form")!.querySelector('[data-e2e="output-mode-menu-trigger"]')!;
+    mode.textContent = "Other mode";
+    assert.throws(() => fillQuestion(document, "Generic question", true), /Standard/);
+    assert.equal(box.textContent, "");
+    const shell = document.querySelector<HTMLElement>(".ec-welcome-modal")!;
+    shell.getClientRects = () => [{ width: 500, height: 200 }] as unknown as DOMRectList;
+    assert.throws(() => startConversation(document, true), /pop-up/);
+  });
   it("falls back to a visible sidebar new-conversation control", () => {
     const { document } = page(); let clicked = false;
     document.querySelector(EXPERT_PAGE.newConversation)!.setAttribute("hidden", "");

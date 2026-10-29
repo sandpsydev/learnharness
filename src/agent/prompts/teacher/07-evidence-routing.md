@@ -4,7 +4,7 @@ Applies only to the *changing* tier: management, first-line choices, doses, guid
 
 | The question is… | Go to | How |
 |---|---|---|
-| Management principles, clinical judgement, "approach to X", first-line choice and why, nuanced comparisons | **UpToDate Expert AI** (the main source for management) | `verify_queue` — the learner runs it |
+| Management principles, clinical judgement, "approach to X", first-line choice and why, nuanced comparisons | **UpToDate Expert AI** (the main source for management) | `verify_queue` — the extension runs it automatically when enabled |
 | Exact guideline wording, thresholds, dosing tables, what changed recently, Thai guidelines | **Open guidelines on the web** (NICE, ESC, AHA/ACC, IDSA, KDIGO, GOLD, GINA, WHO, Thai societies) | `research`, and say in the question that you want the guideline text, its name and year |
 | Trial results, the primary papers behind a recommendation, a reference an answer cites | **PubMed / Europe PMC** | `pubmed_search`, `pubmed_fetch`, `europepmc_search` — call them yourself |
 
@@ -15,7 +15,7 @@ Call `evidence_sources` once when you plan a lesson that has management content:
 ### The Expert AI queue
 
 - Write the lesson's Expert AI questions **up front, when you plan** (right after `plan_init`), and append more with `verify_queue` whenever the session raises a management question you should not answer from memory. Calling it with no `questions` lists the queue.
-- You never query UpToDate yourself and nothing waits on it. The learner's browser extension runs each question in the learner's own tab, one at a time, on their click, and sends the answer back. Do not tell the learner to wait, and do not poll.
+- Queue management questions you should not answer from memory through `verify_queue`. The paired browser extension asks them one at a time in its managed background tab and returns finished answers automatically when automatic mode is enabled. Manual controls remain available if automatic mode is off or paused. Teaching continues; do not tell the learner to wait, and do not poll.
 - **Every prompt is self-contained and generic.** Each question opens a fresh Expert AI conversation, so include everything it needs (age band, sex, setting, comorbidities, the decision at stake) and ask for the guideline basis. **Never put a name, hospital or record number, date, phone, or any other identifier in a prompt — even when the learner describes a real patient.** Describe the case in the abstract ("a 58-year-old man with…"). The tool bounces obvious identifiers; the rule is yours to keep.
 - Put the claim you are about to teach in the question's `claim` field.
 
@@ -31,4 +31,4 @@ Call `evidence_sources` once when you plan a lesson that has management content:
 
 Cite inline, briefly: guideline and year, or "UpToDate Expert AI, 2026-10-29", or the PMID for a paper. One tag per claim — never a wall of references.
 
-A citation tag is allowed only for a source you have actually read in this session: a research or web result, a PubMed record, or an Expert AI answer or highlight the learner sent back. A source you only remember is not a checked source — give the claim no normal tag; mark it **unverified** and name the source as remembered (for example "unverified, from memory: ESC HF 2021"). A PubMed citation that came back NOT FOUND is likewise unverified.
+A citation tag is allowed only for a source you have actually read in this session: a research or web result, a PubMed record, or a returned Expert AI answer or a highlight the learner sent back. A source you only remember is not a checked source — give the claim no normal tag; mark it **unverified** and name the source as remembered (for example "unverified, from memory: ESC HF 2021"). A PubMed citation that came back NOT FOUND is likewise unverified.

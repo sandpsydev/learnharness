@@ -5,7 +5,7 @@
  *
  * THE LOOP (owner's design): the teacher writes self-contained, generic
  * questions into a queue; the learner's browser extension runs them ONE AT A
- * TIME, by the learner's click, in the learner's own logged-in UpToDate
+ * TIME, automatically when enabled or by a manual click, in a logged-in
  * Expert AI tab, and sends each answer (text + reference links) back through
  * the loopback API (src/server/verify-api.ts, docs/verify-api.md). The app
  * itself NEVER contacts UpToDate. Management claims taught before their
@@ -265,7 +265,7 @@ export function buildAnswerBrief(
 			? answer.references.map((r) => `- ${formatVerifyReference(r)}`).join("\n")
 			: "(none sent)";
 	return [
-		`UpToDate Expert AI answered a question you queued (received ${answer.receivedAt.slice(0, 10)}). The learner ran it and sent the answer back.`,
+		`UpToDate Expert AI answered a question you queued (received ${answer.receivedAt.slice(0, 10)}). The browser extension returned the answer.`,
 		`Question asked:\n${item.prompt}`,
 		item.provisionalClaim
 			? `What you taught provisionally while waiting:\n${item.provisionalClaim}`

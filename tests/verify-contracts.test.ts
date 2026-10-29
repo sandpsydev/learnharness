@@ -114,7 +114,7 @@ describe("the briefs the teacher reads", () => {
 	it("no citations → says there was nothing to cross-check", () => {
 		const brief = buildAnswerBrief({ prompt: "q" }, { ...answer, references: [], text: "No ids here." }, [], false);
 		assert.match(brief, /nothing to cross-check/);
-		assert.match(brief, /Reference links it gave:\n\(none sent\)/);
+		assert.match(brief, /Sources it gave[^\n]*:\n\(none sent\)/);
 	});
 
 	it("a highlight brief names the page and the text", () => {

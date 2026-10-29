@@ -87,7 +87,7 @@ The learner pressed *Send to LearnHarness* next to the answer.
 ```
 
 - `text` — required, 1–60 000 characters.
-- `references` — optional, up to 100 of `{ url, title? }`; `url` must be `http(s)`.
+- `references` — optional, up to 100 sources with a `title` or an `http(s)` `url`. Optional fields: `type`, `section`, `pmid`, `doi`. UpToDate topic cards have title and section without a URL; the app cites those by name. Inline source IDs are omitted because they do not have a verified mapping to drawer cards.
 - `sourceUrl` — optional, the page it came from.
 
 Reply (the answer is stored before this returns):

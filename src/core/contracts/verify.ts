@@ -21,11 +21,45 @@
  *  learner sent the answer back). dismissed = the learner skipped it. */
 export type VerifyStatus = "queued" | "asked" | "answered" | "dismissed";
 
-/** A reference link that came with a returned answer or highlight. The
- *  extension sends `title?` + `url`; pmid/doi are derived by the app. */
+/** A source returned by the learner. Inspected UpToDate topic cards carry
+ * title + section but no link; legacy URL references remain valid. */
 export interface VerifyReference {
 	title?: string;
-	url: string;
+	url?: string;
+	type?: string;
+	section?: string;
+	pmid?: string;
+	doi?: string;
+}
+
+/** Shared validation for the extension and local API; never invent a URL. */
+export function cleanVerifyReferences(raw: unknown): VerifyReference[] | null {
+	if (raw === undefined) return [];
+	if (!Array.isArray(raw) || raw.length > VERIFY_LIMITS.maxReferences) return null;
+	const out: VerifyReference[] = [];
+	for (const value of raw) {
+		if (!value || typeof value !== "object") return null;
+		const ref: VerifyReference = {};
+		for (const field of ["title", "url", "type", "section", "pmid", "doi"] as const) {
+			const text = value[field];
+			if (text === undefined) continue;
+			if (typeof text !== "string" || !text.trim() || text.length > 2000) return null;
+			ref[field] = text.trim();
+		}
+		if (!ref.url && !ref.title) return null;
+		if (ref.url) {
+			try { if (!["http:", "https:"].includes(new URL(ref.url).protocol)) return null; } catch { return null; }
+		}
+		if (ref.pmid && !/^\d{4,9}$/.test(ref.pmid)) return null;
+		if (ref.doi && !/^10\.\d{4,9}\/\S+$/i.test(ref.doi)) return null;
+		out.push(ref);
+	}
+	return out;
+}
+
+export function formatVerifyReference(ref: VerifyReference): string {
+	return [ref.type ? `(${ref.type})` : "", ref.title, ref.section, ref.url,
+		ref.pmid ? `PMID ${ref.pmid}` : "", ref.doi ? `DOI ${ref.doi}` : ""].filter(Boolean).join(" — ");
 }
 
 /** The learner's returned Expert AI answer. */
@@ -228,7 +262,7 @@ export function buildAnswerBrief(
 	const cite = expertAiCitation(answer.receivedAt);
 	const refs =
 		answer.references.length > 0
-			? answer.references.map((r) => `- ${r.title ? `${r.title} — ` : ""}${r.url}`).join("\n")
+			? answer.references.map((r) => `- ${formatVerifyReference(r)}`).join("\n")
 			: "(none sent)";
 	return [
 		`UpToDate Expert AI answered a question you queued (received ${answer.receivedAt.slice(0, 10)}). The learner ran it and sent the answer back.`,
@@ -237,7 +271,7 @@ export function buildAnswerBrief(
 			? `What you taught provisionally while waiting:\n${item.provisionalClaim}`
 			: "You did not record a provisional claim for this question.",
 		`Expert AI's answer:\n${answer.text}`,
-		`Reference links it gave:\n${refs}`,
+		`Sources it gave (UpToDate topics are cited by title and section; inline source IDs are omitted because their mapping to these sources is unknown):\n${refs}`,
 		crosscheckSection(checks, lookupFailed),
 		[
 			"What to do now: compare the answer with what you taught. If anything differs, correct it plainly in this reply and cite it as " +
@@ -252,7 +286,7 @@ export function buildAnswerBrief(
 export function buildHighlightBrief(h: Pick<VerifyHighlight, "text" | "url" | "title" | "references" | "receivedAt">): string {
 	const refs =
 		h.references.length > 0
-			? h.references.map((r) => `- ${r.title ? `${r.title} — ` : ""}${r.url}`).join("\n")
+			? h.references.map((r) => `- ${formatVerifyReference(r)}`).join("\n")
 			: "(none sent)";
 	return [
 		`The learner highlighted this text in their browser and sent it to you (${h.receivedAt.slice(0, 10)}).`,

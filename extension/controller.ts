@@ -1,6 +1,6 @@
 import { VerifyApi } from "./api";
 import { httpUrl } from "./config";
-import { VERIFY_LIMITS } from "../src/core/contracts/verify";
+import { VERIFY_LIMITS, cleanVerifyReferences, formatVerifyReference } from "../src/core/contracts/verify";
 import { errorMessage } from "./types";
 import type { ActiveQuestion, Answer, Highlight, QueueItem, SessionState } from "./types";
 
@@ -18,8 +18,8 @@ function validateAnswer(answer: Answer) {
     throw new Error("Paste an answer of 1–60,000 characters.");
   }
   if (!Array.isArray(answer.references) || answer.references.length > VERIFY_LIMITS.maxReferences ||
-      answer.references.some((r) => !r || typeof r.url !== "string" || !httpUrl(r.url) || (r.title !== undefined && typeof r.title !== "string")) ||
-      (answer.sourceUrl !== undefined && !httpUrl(answer.sourceUrl))) throw new Error("Use HTTP or HTTPS source and reference links (at most 100).");
+      !cleanVerifyReferences(answer.references) ||
+      (answer.sourceUrl !== undefined && !httpUrl(answer.sourceUrl))) throw new Error("Use sources with a title or HTTP/HTTPS URL (at most 100).");
 }
 export function validateHighlight(highlight: Highlight) {
   if (!highlight || typeof highlight.text !== "string" || !highlight.text.trim() || highlight.text.length > VERIFY_LIMITS.highlightChars) throw new Error("Select or paste 1–20,000 characters.");
@@ -105,7 +105,7 @@ export class ExtensionController {
       let following: QueueItem | null;
       try { following = (await (await this.ports.api()).answer(active.item.id, answer)).next; }
       catch (error) {
-        const copied = await this.copy([answer.text, ...answer.references.map((r) => r.url)].join("\n\n"));
+        const copied = await this.copy([answer.text, ...answer.references.map(formatVerifyReference)].join("\n\n"));
         await this.ports.write({ ...state, recovery: { kind: "answer", answer }, notice: `Answer kept for retry. ${copied}` });
         throw error;
       }

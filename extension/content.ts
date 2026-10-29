@@ -1,4 +1,4 @@
-import { answerContainer, canSubmit, conversationIsFresh, fillQuestion, readAnswer, requireVisible, startConversation, submitQuestion } from "./expert-page";
+import { answerContainer, canSubmit, conversationIsFresh, fillQuestion, readAnswerWithSources, requireVisible, startConversation, submitQuestion } from "./expert-page";
 import { errorMessage } from "./types";
 import type { Reply } from "./types";
 
@@ -7,13 +7,15 @@ let running = false;
 let returning = false;
 let controls: HTMLElement | undefined;
 let answerNode: HTMLElement | undefined;
+let completionTimer: ReturnType<typeof setTimeout> | undefined;
 const seen = new Set<string>();
 const observer = new MutationObserver(() => attachControls());
-function reset() { observer.disconnect(); controls?.remove(); controls = undefined; answerNode = undefined; pending = undefined; }
+function reset() { clearTimeout(completionTimer); completionTimer = undefined; observer.disconnect(); controls?.remove(); controls = undefined; answerNode = undefined; pending = undefined; }
 function attachControls() {
   if (!pending || document.visibilityState !== "visible") return;
   const answer = answerContainer(document);
   if (!answer || (answer === answerNode && controls?.isConnected)) return;
+  clearTimeout(completionTimer); completionTimer = undefined;
   controls?.remove();
   answerNode = answer;
   controls = document.createElement("aside");
@@ -34,9 +36,10 @@ function attachControls() {
         requireVisible(document);
         const current = answerContainer(document);
         if (!current || current !== answer) throw new Error("The answer changed. Read it again before sending.");
-        const payload = readAnswer(current, location.href);
         returning = true;
         controls?.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+        status.textContent = "Reading sources…";
+        const payload = await readAnswerWithSources(current, location.href);
         status.textContent = "Sending…";
         const reply: Reply = await chrome.runtime.sendMessage({ type: "answer", answer: payload, next, requestId: binding.requestId });
         if (!reply.ok) throw new Error(reply.error);
@@ -53,7 +56,7 @@ function attachControls() {
   controls.append(makeButton("Send to LearnHarness", false), makeButton("Send & ask next", true), status);
   answer.after(controls);
 }
-async function waitUntil(check: () => boolean, ms = 4000) {
+async function waitUntil(check: () => boolean, ms = 10_000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     requireVisible(document);
@@ -84,6 +87,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     pending = { requestId: message.requestId, prompt: message.prompt };
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
     attachControls();
+    if (!answerNode) completionTimer = setTimeout(() => {
+      // The copy action bar is only the best available completion signal.
+      // Never resubmit on timeout; leave the learner a manual return path.
+      if (!pending || answerNode) return;
+      controls = document.createElement("aside");
+      controls.setAttribute("role", "alert");
+      controls.textContent = "Expert AI completion was not detected within two minutes. Read the answer in this tab, then use manual paste-back in the LearnHarness toolbar. Do not submit the question again.";
+      document.body.prepend(controls);
+    }, 120_000);
     respond({ ok: true, submitted: true });
   })().catch((error) => {
     const message = errorMessage(error);

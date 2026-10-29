@@ -1,6 +1,6 @@
 # LearnHarness Medical — fork spec
 
-Status: **approved by owner** (2026-10-29). The build plan is implemented in PRs #1–#9 on the fork.
+Status: **approved by owner** (through Phase 9, 2026-10-30). The build plan is implemented through Phase 9 on the fork.
 
 This is a **build plan**: what to change in the LearnHarness code and prompts to make the medical version. The running app never reads this file.
 
@@ -112,6 +112,29 @@ The learner uses LearnHarness from their phone on the ward, while the Mac at hom
 
 Undecided details are the crew's call, listed in the PR. For example: the port, how the launcher finds and reuses the desktop app's data folder, how it refuses to start while the desktop app is running, the capture storage format, and the phone breakpoints.
 
+## Phase 9 — Faster, deeper teaching (owner-approved 2026-10-30)
+
+Goal: harder and faster. Time goes where the learner's understanding is thin, and every question sits at the edge of what they can do. Kept deliberately simple, with one planning procedure and one pacing principle, so the tutor adapts by judgment rather than by tuned settings. Probing is unchanged.
+
+- **Probe verdict:** `probe_done` records a status for each area: **hold**, **shaky** or **gap**. The plan is built from it.
+- **Planning procedure:** every plan is presented in the same short shape:
+  1. **Goal:** one sentence on what the learner will be able to do at the end, framed at the bedside (recognise, explain, decide).
+  2. **Already yours:** what the probe shows the learner holds. Never re-taught; at most one test-out question each. Taught only if that question is missed.
+  3. **To build:** the gaps on the path to the goal, ordered by clinical weight (danger and first move first), each with a one-line reason it matters at the bedside.
+  4. **Optional deeper:** worthwhile off-path items, listed but not taught unless the learner picks them.
+  5. **Rough time** for the plan.
+  An emphasis request picks from Optional or reshapes the goal; it never stacks extra steps on top. If it clashes with the probe ("you're already strong there"), the tutor says so in one line before changing the plan.
+- **Sources at planning time:** when the library covers the topic, the tutor checks the learner's lecture slides and books for what their faculty emphasises, and may add a To-build item the probe missed. A book's chapter outline never becomes the plan: books set accuracy and emphasis, not scope.
+- **Depth matches scope:** a broad topic (for example a lecture covering many conditions) gets a solid overview: the shared framework that ties the conditions together, and for each condition the must-know points, core pathophysiology and basic management. It is never a vague list. Conditions that deserve more are offered as deep dives, which the learner can send to Tonight's questions. A single-condition topic goes all the way down. The tutor judges which kind a topic is.
+- **Pacing principle — every answer moves the edge:**
+  - **Right and confident:** the next question goes up the ladder, harder and more real-world. Apply it to a new case; then a case with a twist (a comorbidity, a drug, a misleading clue); then a real ward decision (what you do now, what you watch for, when you call your senior). A right answer earns a harder question, not more of the same.
+  - **Wrong or unsure:** step back, build in smaller steps, then climb again.
+  - Prediction questions only where discovering the next step is worth it, usually in To-build. Never for material the learner holds.
+- **"I know this — test me":** a button on the current step (and the same phrase in chat). It skips the explanation and asks one hard applied question; right moves on, wrong teaches the step.
+- **Plan view:** the map shows which nodes are Already yours, To build and Optional.
+
+Undecided details are the crew's call, listed in the PR, as usual: for example, the shape of the probe-status field, how the map shows the three groups, and where the button sits.
+
 ## Repo / workflow
 
 - Public GitHub fork of `amosblomqvist/learnharness` under the owner's account; work on branch `medical` (the fork's default branch); `main` mirrors upstream and is merged into `medical` periodically.
@@ -192,6 +215,8 @@ Stay on the existing **pi engine with ChatGPT**. Possible future migration to th
 - **Export graph to Obsidian:** one-way export; each proposition becomes a note and each chain becomes `[[links]]` from premises to conclusion, so the graph sits beside the SlideScribe vault. Revisit after the owner has used the app (owner, 2026-10-29).
 
 ## Open items
+
+- Try Phase 9 in a real teaching session: confirm the probe verdict shifts time toward gaps, an emphasis request reshapes scope, and test-out works on both Mac and phone.
 
 - Complete the first ChatGPT sign-in in the app.
 - Add a free Tavily key for web search.

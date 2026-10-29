@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
-import { probeDoneInputSchema, PROBE_DONE_ACK_TEXT } from "../../core/contracts.ts";
+import { medicalProbeDoneInputSchema, PROBE_DONE_ACK_TEXT } from "../../core/contracts.ts";
 import { danglingQuestionOf, hasProbeDone, type LhMessage } from "../../core/native-messages.ts";
 import type { ChatStore } from "../../core/ports.ts";
 import { buildProbeHandoffSteer, type SteerMessage } from "../../core/contracts.ts";
@@ -56,13 +56,13 @@ export function probeDoneTool(ctx: ProbeDoneContext): Record<string, AgentTool<a
 				"complete: every strand the lesson depends on is bracketed (a floor the learner reliably gets right AND a " +
 				"ceiling where it runs out), and the learner's learning goal is concrete. The input IS the learner assessment — " +
 				"one strand per dependency the lesson will rest on, with your read of where the learner's edge sits on it " +
-				"(floor, ceiling, misconceptions, what to build from). It streams to the learner live and becomes " +
+				"(floor, ceiling, misconceptions, what to build from), plus status hold/shaky/gap from that same evidence. It streams to the learner live and becomes " +
 				"the handoff artifact the teacher plans from. Refused while a question is still open, and after " +
 				"the probe is already concluded. After it succeeds, say your closing sentence and end your turn.",
-			// The core-owned schema (contracts/probe.ts) — the SAME schema the UI
-			// parse seam (tool-parts.ts) runs, so boundary-valid ⇔ consumer-parseable.
-			parameters: probeDoneInputSchema,
-			execute: serverExecute("probe_done", probeDoneInputSchema, async (input) => {
+			// Medical conclusions require status; the display schema accepts
+			// those plus historical conclusions recorded without a verdict.
+			parameters: medicalProbeDoneInputSchema,
+			execute: serverExecute("probe_done", medicalProbeDoneInputSchema, async (input) => {
 				const record = ctx.chatStore.getChat(ctx.chatId);
 				if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
 

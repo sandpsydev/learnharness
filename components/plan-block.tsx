@@ -14,7 +14,7 @@ import { layout as dagreLayout } from "dagre-d3-es/src/dagre/index.js";
 import { curveBasis, line } from "d3-shape";
 import { fitGraphView, fitZoomFor, zoomedGraphView, type Viewport } from "@/components/pan-zoom";
 import type { PlanBlockData, PlanNodeStatus, PlanTree } from "@/src/core";
-import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
+import { derivedNodeStatus, derivePlanStatuses, PLAN_GROUP_LABELS, type PlanGroup } from "@/src/core";
 import { Hint } from "@/components/ui/hint";
 
 /**
@@ -93,6 +93,7 @@ export const GAP_Y = 48;
 export interface LayoutNode {
 	id: string;
 	title: string;
+	group?: PlanGroup;
 }
 
 /** Topological order + longest-path depth (Kahn, authoring tie-break) —
@@ -162,7 +163,7 @@ export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{
 	const g = new graphlib.Graph({ compound: false, multigraph: true });
 	g.setGraph({ rankdir: "TB", nodesep: GAP_X, ranksep: GAP_Y, marginx: 0, marginy: 0 });
 	for (const n of nodes) {
-		const lines = wrapTitle(n.title);
+		const lines = wrapTitle(displayTitle(n));
 		const h = NODE_H + Math.max(0, lines.length - 2) * LINE_H;
 		nodeH.set(n.id, h);
 		nodeW.set(n.id, nodeWidth(lines));
@@ -277,6 +278,10 @@ export function wrapTitle(title: string, maxChars = 28): string[] {
 		}
 	}
 	return lines;
+}
+
+function displayTitle(node: LayoutNode): string {
+	return node.group ? `${PLAN_GROUP_LABELS[node.group]}: ${node.title}` : node.title;
 }
 
 // ─── Geometry caps (owner, plan-graph refinement round 1) ─────────────────────
@@ -613,7 +618,7 @@ export function PlanDiagram({
 			{nodes.map((n) => {
 				const status = statusOf(n.id);
 				const glow = n.id === glowId && !monochrome;
-				const lines = wrapTitle(n.title);
+				const lines = wrapTitle(displayTitle(n));
 				// The box hugs its wrapped content; text centers in it —
 				// horizontally too now (text-first sizing round, 2026-10-07).
 				const h = layout.nodeH.get(n.id) ?? NODE_H;
@@ -625,6 +630,7 @@ export function PlanDiagram({
 						transform={`translate(${layout.x.get(n.id) ?? 0}, ${layout.y.get(n.id) ?? 0})`}
 						data-testid={`plan-node-${n.id}`}
 						data-status={status}
+						data-group={n.group}
 					>
 						{/* Rectangular — no corner rounding (owner). */}
 						<rect

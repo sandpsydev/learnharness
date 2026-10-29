@@ -113,7 +113,8 @@ export function parseExplainInput(input: unknown): ExplainToolInput | undefined 
 	return cleaned;
 }
 
-/** probe_done parse — the core-owned schema the tool itself declares. */
+/** probe_done display parse — the medical tool shape plus historical
+ * conclusions without a recorded verdict. Unknown statuses still fail. */
 export function parseProbeDoneInput(input: unknown): ProbeDoneInput | undefined {
 	return boundaryParse<ProbeDoneInput>(probeDoneInputSchema, input);
 }

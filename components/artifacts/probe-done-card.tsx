@@ -55,7 +55,7 @@ export function ProbeDoneCard({ part }: { part: { input?: unknown; output?: unkn
 				<div className="space-y-2">
 					{strands.map((s, i) => (
 						<div key={i} className="rounded-lg bg-background/60 px-3 py-2">
-							<div className="text-sm font-medium">{s.strand}</div>
+							<div className="text-sm font-medium">{s.strand}{s.status && <span className="ml-2 text-xs text-muted-foreground">{s.status}</span>}</div>
 							<div className="mt-0.5 text-sm text-muted-foreground">{s.assessment}</div>
 						</div>
 					))}

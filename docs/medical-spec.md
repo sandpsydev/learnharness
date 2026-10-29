@@ -1,6 +1,6 @@
 # LearnHarness Medical — fork spec
 
-Status: **approved by owner** (2026-10-29). Nothing below is implemented yet.
+Status: **approved by owner** (2026-10-29). The build plan is implemented in PRs #1–#9 on the fork.
 
 This is a **build plan**: what to change in the LearnHarness code and prompts to make the medical version. The running app never reads this file.
 
@@ -163,6 +163,8 @@ Stay on the existing **pi engine with ChatGPT**. Possible future migration to th
 
 ## Open items
 
-- Owner to create a free Tavily key (web search) once `med-verify-app` lands.
-- Owner to be present for the Expert AI page inspection (`med-extension`).
-- Anki desktop + AnkiConnect installed by owner (2026-10-29), ready for `med-anki`'s live test.
+- Complete the first ChatGPT sign-in in the app.
+- Add a free Tavily key for web search.
+- Push the first reviewed cards to Anki with Anki desktop and AnkiConnect running.
+- Ask the first live Expert AI question and send the answer back; note whether "Send to LearnHarness" appears before the answer finishes streaming.
+- Import the first PDF or SlideScribe note into the library.

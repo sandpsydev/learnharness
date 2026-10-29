@@ -96,6 +96,22 @@ You bring in a question-bank question you got wrong (UWorld, AMBOSS, NL past pap
 - **The bank's content:** it is never copied word for word into graph nodes, session titles or cards. Concepts are written in the tutor's own words. Question text and screenshots stay in the local data dir.
 - **Not included (owner decisions):** no batch mode, no automatic Anki offer (the existing session "Make Anki cards" action still works), no miss log.
 
+## Phase 8 — Pocket mode (owner-approved 2026-10-29)
+
+The learner uses LearnHarness from their phone on the ward, while the Mac at home does the work. The quick parts are on the phone; the heavy parts stay on the Mac.
+
+- **Connection:** one command on the Mac turns phone access on. It runs the app in browser mode, listening on 127.0.0.1 only and never 0.0.0.0, on a fixed port. It keeps the Mac awake while phone access is on and prints the phone link. The phone reaches it through **Tailscale Serve** (tailnet-only HTTPS); never **Funnel** (public). Browser mode has no login, so tailnet-only is the security boundary. The desktop app's per-window API lock stays as it is.
+- **One graph:** phone and Mac share the same data. While pocket mode is on, the Mac also uses the browser-mode link instead of the desktop app. Two servers never write the same data dir at once.
+- **On the phone:**
+  1. **Capture inbox (build first):** type a question or topic in seconds (the phone keyboard's dictation works). Text only: no photo or file attachments (owner decision, patient privacy), and a "no patient identifiers" reminder on the box. Captures show on the Mac's home screen as "Tonight's questions". One tap starts a teaching session on one; captures can be marked done or deleted. A capture can also be started right away from the phone.
+  2. **Quick practice:** a short tap-to-answer A–E round from the learner's graph, filterable by organ system (e.g. the current rotation).
+  3. **Short sessions:** start or continue a teaching session, laid out for a phone screen (including Explain my miss).
+  4. **Expert AI queue, view only:** see the waiting questions; asking stays at the Mac.
+- **Stays on the Mac:** asking Expert AI (Chrome extension), the Anki review panel, PDF and SlideScribe import, the graph view, and settings.
+- **Cost:** none. Tailscale's free personal plan; the models still run on ChatGPT Plus.
+
+Undecided details are the crew's call, listed in the PR. For example: the port, how the launcher finds and reuses the desktop app's data folder, how it refuses to start while the desktop app is running, the capture storage format, and the phone breakpoints.
+
 ## Repo / workflow
 
 - Public GitHub fork of `amosblomqvist/learnharness` under the owner's account; work on branch `medical` (the fork's default branch); `main` mirrors upstream and is merged into `medical` periodically.

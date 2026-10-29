@@ -24,12 +24,13 @@
  *     would shadow every settings-page key change until restart.
  */
 
-const { app, BrowserWindow, Menu, ipcMain, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } = require("electron");
 const { createChatGPT, fileStore } = require("./chatgpt.cjs");
 const { attachChatGPTChild, trustedSender, chatGPTControl } = require("./chatgpt-ipc.cjs");
 const { createSubscriptions, loadSubscriptionSDK } = require("./subscriptions.cjs");
 const { attachSubscriptionChild, subscriptionControl } = require("./subscription-ipc.cjs");
 const { desktopAPIHeaders } = require("./desktop-api.cjs");
+const { pocketRunning } = require("./pocket-lock.cjs");
 const { openWebSubscriptionBrowser } = require("./web-subscription-browser.cjs");
 const { randomBytes } = require("node:crypto");
 const { spawn } = require("node:child_process");
@@ -645,6 +646,17 @@ async function main() {
 	process.on("SIGHUP", killServer);
 
 	await app.whenReady();
+
+	// Pocket mode (Phase 8): while phone access is on, the browser-mode server
+	// owns the data folder — a second server here would write the same files.
+	if (!process.env.LH_DEV_URL && pocketRunning(DATA_DIR())) {
+		dialog.showErrorBox(
+			"Phone access is on",
+			"LearnHarness is already running in phone-access mode, and two copies must not share your data. Open the link the phone-access command printed in your browser, or stop it (Ctrl+C in its Terminal window) and open this app again.",
+		);
+		app.quit();
+		return;
+	}
 
 	// Dev mode: point at a running `next dev` server (LH_DEV_URL) — no
 	// spawn, no packaging, full HMR. The rest of this shell still applies

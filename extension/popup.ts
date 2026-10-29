@@ -1,6 +1,6 @@
 import { formatVerifyReference } from "../src/core/contracts/verify";
 import type { VerifyReference } from "../src/core/contracts/verify";
-import { element, referenceLines, request } from "./ui";
+import { describePhase, element, referenceLines, request } from "./ui";
 import { errorMessage } from "./types";
 import type { ActiveQuestion, Answer, QueueItem, SessionState } from "./types";
 let active: ActiveQuestion | undefined;
@@ -11,7 +11,7 @@ function say(text: string) { element("notice").textContent = text; }
 function stateView(state: SessionState, restoreDraft = false) {
   active = state.active;
   element("active").hidden = !active;
-  element("phase").textContent = active ? `Status: ${active.phase}. ${active.item.chatTitle}` : "";
+  element("phase").textContent = active ? `${active.item.chatTitle}: ${describePhase(active.phase)}` : "";
   element("prompt").textContent = active?.item.prompt ?? "";
   if (state.notice) say(state.notice);
   if (restoreDraft && state.recovery?.kind === "answer") {

@@ -7,11 +7,12 @@ import { describe, it } from "node:test";
 import { parseHTML } from "linkedom";
 import { VerifyApi } from "../extension/api";
 import { DEFAULT_CONFIG, isExpertUrl, validateConfig } from "../extension/config";
+import { Attempts } from "../extension/attempts";
 import { ExtensionController } from "../extension/controller";
 import type { ControllerPorts, PageResult } from "../extension/controller";
 import { EXPERT_PAGE, answerContainer, canSubmit, questionBox, readAnswerWithSources, conversationIsFresh, fillQuestion, readAnswer, startConversation, submitQuestion } from "../extension/expert-page";
 import type { Answer, QueueItem, SessionState } from "../extension/types";
-import { referenceLines } from "../extension/ui";
+import { describePhase, referenceLines } from "../extension/ui";
 
 const fixture = readFileSync(new URL("./fixtures/extension/expert-ai.html", import.meta.url), "utf8");
 function page() {
@@ -36,7 +37,7 @@ function page() {
 }
 const items: QueueItem[] = ["a", "b"].map((id) => ({ id, chatId: "chat_1", chatTitle: "Fixture lesson", prompt: `Generic question ${id}: explain the guideline basis.`, status: "queued", createdAt: "2026-10-29T00:00:00.000Z" }));
 const answer: Answer = { text: "Fixture answer.", references: [{ title: "Fixture reference", url: "https://example.org/guideline" }], sourceUrl: "https://example.org/local-fixture" };
-function harness(options: { pageResult?: PageResult; fail?: string; delaySubmit?: Promise<void> } = {}) {
+function harness(options: { pageResult?: PageResult; fail?: string; delaySubmit?: Promise<void>; neverBegan?: boolean } = {}) {
   let state: SessionState = {};
   const calls: Array<{ path: string; body?: unknown; auth: string | null; method: string }> = [];
   const submissions: Array<{ id: string; requestId: string }> = [];
@@ -69,6 +70,7 @@ function harness(options: { pageResult?: PageResult; fail?: string; delaySubmit?
     focusExpert: async () => 7,
     submit: async (_tabId, item, requestId) => { submissions.push({ id: item.id, requestId }); await options.delaySubmit; return options.pageResult ?? { ok: true, submitted: true }; },
     clipboard: async (text) => { copies.push(text); },
+    closeAttempt: async () => options.neverBegan === true,
   };
   return { controller: new ExtensionController(ports), ports, api, calls, submissions, copies, state: () => state };
 }
@@ -269,6 +271,68 @@ describe("extension learner-action controller", () => {
     await restarted.answer(answer, false);
     assert.equal(h.state().active, undefined);
   });
+  it("ends cleanly when the page proves nothing was filled, e.g. a sign-in screen: item stays queued and the next question can be asked", async () => {
+    const h = harness({ pageResult: { ok: false, submitted: false, untouched: true, error: "Sign in to Expert AI and use the university network, then retry." } });
+    await assert.rejects(h.controller.ask("a"), /Nothing was sent.*still queued.*sign in.*click Ask in Expert AI again/is);
+    assert.equal(h.state().active, undefined, "no blocking current-question binding");
+    assert.match(h.state().notice!, /sign in.*click Ask in Expert AI again/is);
+    assert.equal(h.calls.some((c) => c.path.endsWith("/asked")), false);
+    assert.deepEqual(h.copies, [], "the learner's clipboard is not touched");
+    h.ports.submit = async (_tab, item) => { h.submissions.push({ id: item.id, requestId: "" }); return { ok: true, submitted: true }; };
+    await h.controller.ask("b");
+    assert.deepEqual(h.submissions.map((s) => s.id), ["a", "b"]);
+    assert.equal(h.state().active?.phase, "asked");
+  });
+  it("a clean stop restores the manual question the learner had chosen before asking", async () => {
+    const h = harness({ pageResult: { ok: false, submitted: false, untouched: true, error: "Sign in." } });
+    await h.controller.manual("a");
+    await assert.rejects(h.controller.ask("a"), /Nothing was sent/);
+    assert.equal(h.state().active?.phase, "manual");
+  });
+  it("ends cleanly when the tab goes away before the page began filling", async () => {
+    const h = harness({ neverBegan: true });
+    h.ports.submit = async () => { throw new Error("The message port closed before a response was received."); };
+    await assert.rejects(h.controller.ask("a"), /Nothing was sent.*still queued/);
+    assert.equal(h.state().active, undefined);
+    assert.equal(h.calls.some((c) => c.path.endsWith("/asked")), false);
+    h.ports.submit = async () => ({ ok: true, submitted: true });
+    await h.controller.ask("b");
+    assert.equal(h.state().active?.phase, "asked");
+  });
+  it("ends cleanly when Expert AI cannot even be opened", async () => {
+    const h = harness();
+    h.ports.focusExpert = async () => { throw new Error("Could not open Expert AI. Copy the prompt instead."); };
+    await assert.rejects(h.controller.ask("a"), /Nothing was sent.*Could not open/s);
+    assert.equal(h.state().active, undefined);
+    assert.equal(h.submissions.length, 0);
+  });
+  it("stays uncertain when the tab is lost after the page began, but release and a fresh pick still work", async () => {
+    const h = harness();
+    h.ports.submit = async () => { throw new Error("port closed after the page began"); };
+    await assert.rejects(h.controller.ask("a"), /did not confirm/);
+    assert.equal(h.state().active?.phase, "uncertain");
+    await assert.rejects(h.controller.ask("a"), /current answer first/);
+    assert.match(describePhase("uncertain"), /release/i);
+    await h.controller.release();
+    assert.equal(h.state().active, undefined);
+    await h.controller.manual("a");
+    assert.equal(h.copies.at(-1), items[0]!.prompt);
+  });
+  it("stays uncertain when the extension cannot tell whether the page began", async () => {
+    const h = harness();
+    h.ports.submit = async () => { throw new Error("port closed"); };
+    h.ports.closeAttempt = async () => { throw new Error("worker restarted"); };
+    await assert.rejects(h.controller.ask("a"), /did not confirm/);
+    assert.equal(h.state().active?.phase, "uncertain");
+  });
+  it("turns a cut-off 'starting' binding into an uncertain one the learner can release", async () => {
+    const h = harness();
+    await h.ports.write({ active: { item: items[0]!, requestId: "old", phase: "starting", tabId: 7 } });
+    await assert.rejects(h.controller.ask("b"), /cut off/);
+    assert.equal(h.state().active?.phase, "uncertain");
+    await h.controller.release();
+    await h.controller.ask("b");
+  });
   it("blocks overlapping actions, including while a page submit is pending", async () => {
     let resolve!: () => void;
     const h = harness({ delaySubmit: new Promise<void>((r) => { resolve = r; }) });
@@ -351,6 +415,22 @@ describe("extension learner-action controller", () => {
     const h = harness(); await h.controller.manual("a"); await h.controller.release();
     assert.equal(h.state().active, undefined);
     assert.deepEqual(h.calls.map((c) => c.path), ["queue"]);
+  });
+});
+
+describe("extension fill permission", () => {
+  it("grants the page permission once, only to its own tab, and refuses after the attempt was closed", () => {
+    const attempts = new Attempts();
+    attempts.open("r1", 7);
+    assert.equal(attempts.begin("r1", 8), false, "another tab");
+    assert.equal(attempts.begin("nope", 7), false, "unknown request");
+    assert.equal(attempts.begin("r1", 7), true);
+    assert.equal(attempts.close("r1"), false, "once begun it can never be called untouched");
+    attempts.open("r2", 7);
+    assert.equal(attempts.close("r2"), true);
+    assert.equal(attempts.begin("r2", 7), false, "a late page cannot start after the extension gave up");
+    assert.equal(attempts.close("r1"), false, "an older request is forgotten, so it stays uncertain");
+    assert.equal(new Attempts().close("r2"), false, "after a worker restart nothing is provable");
   });
 });
 

@@ -22,6 +22,7 @@ export type Request =
   | { type: "ask"; id?: string } | { type: "manual"; id: string }
   | { type: "release" } | { type: "copy"; text: string }
   | { type: "answer"; answer: Answer; next: boolean; requestId?: string }
+  | { type: "begin"; requestId: string }
   | { type: "highlight"; highlight: Highlight };
 export type Reply<T = unknown> = { ok: true; data: T } | { ok: false; error: string };
 export function errorMessage(error: unknown): string {

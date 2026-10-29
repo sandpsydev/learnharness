@@ -75,11 +75,17 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   running = true;
   seen.add(message.requestId);
   let submitted = false;
+  let filling = false;
   void (async () => {
     requireVisible(document);
     reset();
     startConversation(document);
     await waitUntil(() => conversationIsFresh(document));
+    // Ask the extension before writing anything. Without its yes, nothing is filled,
+    // and the extension can tell that this tab never started.
+    const granted: Reply | undefined = await chrome.runtime.sendMessage({ type: "begin", requestId: message.requestId });
+    if (!granted?.ok) throw new Error("The extension is no longer waiting for this tab. Click Ask in Expert AI again.");
+    filling = true;
     fillQuestion(document, message.prompt);
     await waitUntil(() => canSubmit(document));
     submitted = true; // A thrown click/closed port must not trigger an automatic retry.
@@ -104,7 +110,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     controls.style.cssText = "padding:12px;border:2px solid #888;background:Canvas;color:CanvasText;font:14px system-ui";
     controls.textContent = `${message} Open the LearnHarness toolbar for Copy prompt and manual paste-back.`;
     document.body.prepend(controls);
-    respond({ ok: false, submitted, error: message });
+    respond({ ok: false, submitted, untouched: !filling, error: message });
   }).finally(() => { running = false; });
   return true;
 });

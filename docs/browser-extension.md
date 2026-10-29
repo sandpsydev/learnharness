@@ -65,7 +65,12 @@ conversation, fills one prompt, submits it, and marks it asked in LearnHarness.
 Before filling, it checks that the response mode reads **Standard** and asks
 you to switch it yourself if needed. It never changes the dropdown. The learner must leave the tab and
 window visible/focused during fill/send. Sign-in/access screens leave the item
-queued and give the sign-in/university-network message. Visible welcome,
+queued and give the sign-in/university-network message. The extension never
+signs in for you. Just before it writes into the page, the page asks the
+extension for permission; if that never happened (a sign-in screen, a tab that
+went away, a page that never showed an empty new conversation), the attempt
+ends cleanly with no current question and every button usable. Sign in to
+Expert AI yourself, then click **Ask in Expert AI** again. Visible welcome,
 disclaimer or dosing popups ask you to close the popup and retry. The extension
 waits up to ten seconds for the fresh screen and send button.
 
@@ -81,8 +86,9 @@ thinking details and disclaimers are excluded. If completion is not detected
 within two minutes, a message points to manual paste-back without resubmitting.
 A local binding and a mutation lock
 prevent overlapping questions, duplicate clicks and stale-answer returns. A lost
-submission acknowledgement is treated as uncertain and never automatically
-retried. An API failure after successful submission leaves the binding intact;
+submission acknowledgement after the page began filling is treated as
+uncertain and never automatically retried; **Release current question** and
+**Copy prompt** stay available for it. An API failure after successful submission leaves the binding intact;
 return the answer manually rather than submitting the prompt again.
 
 There are no background queries, queue polling, hidden site tabs, login handling,

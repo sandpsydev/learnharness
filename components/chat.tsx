@@ -29,7 +29,7 @@ import { blurAfterPointerClick } from "@/components/focus-hygiene";
 import { dockStateKey } from "@/components/dock-state-key";
 import { clearOpeningPrompt, readOpeningPromptEntry, stashOpeningPrompt, OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
 import { forwardDockWheel, useDockHeight } from "@/components/dock-height";
-import { QueuedSteersBody, type QueuedSteerLine } from "@/components/queued-steers";
+import { pendingExpertAnswerNotice, QueuedSteersBody, type QueuedSteerLine } from "@/components/queued-steers";
 import { DictationBar, finishDictation, joinDictation, useDictation } from "@/components/dictation";
 import { useFieldCycle } from "@/components/field-cycle";
 import { JobsContext } from "@/components/jobs-context";
@@ -1704,6 +1704,7 @@ export function Chat({
 					dictationSlot={<DictationBar dictation={dictation} />}
 					dictationCancel={dictation.cancel}
 					queuedSteers={visibleQueuedSteers(steerQueue, nativeMessages)}
+					expertAnswerNotice={pendingExpertAnswerNotice(jobs, chatId, nativeMessages)}
 					setupCta={
 						zeroKeys ? (
 							<ZeroKeysPill onOpen={() => setSetupOpen(true)} />
@@ -1938,6 +1939,7 @@ function DockOverlay({
 	dictationCancel,
 	setupCta,
 	queuedSteers,
+	expertAnswerNotice,
 }: {
 	pending: ReturnType<typeof pendingQuestionOf>;
 	initialQuestionDraft?: QuestionFormDraft;
@@ -1986,6 +1988,7 @@ function DockOverlay({
 	/** The queued-steer indicator's lines (composer steering, 2026-10-03):
 	 *  already filtered by visibleQueuedSteers — only undrained steers. */
 	queuedSteers: QueuedSteerLine[];
+	expertAnswerNotice: string | null;
 	/** The persistent setup CTA (BYOK, owner 2026-09-22): the same pill
 	 *  home and /chat/new carry, above the composer while slots are unset. */
 	setupCta?: React.ReactNode;
@@ -2348,7 +2351,7 @@ function DockOverlay({
 					    one-liners above the shell - right-aligned to where its corner
 					    rounding starts, truncated, no background, no container. A
 					    line dies when its card lands (visibleQueuedSteers). */}
-					<QueuedSteersBody steers={queuedSteers} />
+					<QueuedSteersBody steers={queuedSteers} notice={expertAnswerNotice} />
 					{/* The reading-thinking field (owner 2026-10-03): mounted while a
 					    teach-phase check waits — the same cue that collapses it. It
 					    claims dictated speech until the learner reveals the check

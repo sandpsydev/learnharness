@@ -30,6 +30,7 @@ const verifyServer = await import("../src/server/verify.ts");
 const api = await import("../src/server/verify-api.ts");
 const { setTurnRunner, discardChatDeliveries } = await import("../src/server/jobs.ts");
 const { steerDelivered } = await import("../src/core/contracts.ts");
+const { pendingExpertAnswerNotice } = await import("../components/queued-steers.tsx");
 
 type ToolResult = { details?: unknown; isError?: boolean; content: Array<{ type: string; text?: string }> };
 
@@ -449,12 +450,15 @@ describe("the verify loop", () => {
 		verifyServer.receiveAnswer(item!.id, { text: "Wake answer." });
 		await verifyServer.deliverAnswer(item!.id, { fetchFn: fakeNcbi() });
 		const jobId = verifyStore.getItem(item!.id)!.deliveryJobId!;
+		assert.match(pendingExpertAnswerNotice(jobStore.listJobs(chatId), chatId, chatStore.getChat(chatId)!.messages)!, /Expert AI answer received/);
+		assert.equal(wakes, 0, "the receipt comes from pending state, before a teacher turn");
 		const started = Date.now();
 		while (jobStore.getJob(jobId)!.delivery?.status !== "delivered") {
 			if (Date.now() - started > 10_000) throw new Error("timeout waiting for delivery");
 			await new Promise((r) => setTimeout(r, 25));
 		}
 		assert.equal(wakes, 1);
+		assert.equal(pendingExpertAnswerNotice(jobStore.listJobs(chatId), chatId, chatStore.getChat(chatId)!.messages), null);
 		const messages = chatStore.getChat(chatId)!.messages as Array<{ role: string; customType?: string; content: unknown }>;
 		const marker = messages.find((m) => m.role === "custom" && m.customType === "subagent-steer");
 		assert.ok(marker, "the brief is in the session as a steer marker");

@@ -43,6 +43,7 @@ function snapshot(tree: PlanTree, messages: readonly LhMessage[]): PlanBlockData
 		nodes: tree.nodes.map((n) => ({
 			id: n.id,
 			title: n.title,
+			...(n.group ? { group: n.group } : {}),
 			status: statuses.current === n.id ? "current" : statuses.visited.has(n.id) ? "visited" : "upcoming",
 		})),
 		edges: tree.edges.map((e) => ({ from: e.from, to: e.to })),

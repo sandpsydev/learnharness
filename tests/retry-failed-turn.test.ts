@@ -290,7 +290,7 @@ describe("failed-response Retry (issue #110)", () => {
 	});
 
 	it("a retained failed probe retries with the prober, concludes once, then selects the teacher", async () => {
-		const input = { assessment: { strands: [{ strand: "planet order", assessment: "Names known; ordering needs work." }] } };
+		const input = { assessment: { strands: [{ strand: "planet order", status: "shaky", assessment: "Names known; ordering needs work." }] } };
 		const { engine, histories } = scripted([
 			() => fauxAssistantMessage([fauxToolCall("probe_done", input, { id: "failed-probe" })], { stopReason: "error", errorMessage: "cut off" }),
 			() => fauxAssistantMessage([fauxToolCall("probe_done", input, { id: "fresh-probe" })], { stopReason: "toolUse" }),

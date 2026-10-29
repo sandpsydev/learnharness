@@ -8,7 +8,7 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { LhMessage } from "../native-messages.ts";
 import type { Phase3 } from "../phases.ts";
-import type { PlanNodeStatus, PlanTree } from "./plan.ts";
+import type { PlanGroup, PlanNodeStatus, PlanTree } from "./plan.ts";
 import type { EmissionStats } from "./graph.ts";
 
 // ─── Chat records (the session store's on-disk format) ───────────────────────
@@ -242,7 +242,7 @@ export interface PlanBlockData {
 	current: string | null;
 	/** All nodes of the authored tree. Statuses are the snapshot's,
 	 * derived at emission time — the block never re-derives at render. */
-	nodes: Array<{ id: string; title: string; status: PlanNodeStatus }>;
+	nodes: Array<{ id: string; title: string; status: PlanNodeStatus; group?: PlanGroup }>;
 	edges: Array<{ from: string; to: string }>;
 }
 

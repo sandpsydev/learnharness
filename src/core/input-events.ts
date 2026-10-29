@@ -28,6 +28,8 @@
  * turn rides one composition.
  */
 
+import { testOutAppends } from "./medical-teaching.ts";
+import type { PlanTree } from "./contracts/plan.ts";
 import type { QuestionAnswerData } from "./question-core.ts";
 import type { LhMessage } from "./native-messages.ts";
 import {
@@ -202,12 +204,16 @@ export function parseChatInput(input: unknown): ChatInput {
  * double-answering.
  */
 export function inputAppends(
-	record: { messages: LhMessage[]; kind?: string },
+	record: { messages: LhMessage[]; kind?: string; tree?: PlanTree },
 	input: ChatInput,
 ): LhMessage[] {
 	switch (input.type) {
-		case "text":
-			return [...dismissalConclusion(record), newUserMessage(input.text)];
+		case "text": {
+			let testOut;
+			try { testOut = testOutAppends(record, input.text); }
+			catch (err) { throw new ChatInputError((err as Error).message); }
+			return [...dismissalConclusion(record), ...testOut, newUserMessage(input.text)];
+		}
 		case "answer": {
 			const pending = danglingQuestionOf(record.messages);
 			if (!pending || pending.toolCallId !== input.toolCallId) {

@@ -47,6 +47,8 @@ import {
 	type LhMessage,
 	type ModelSlotName,
 } from "@/src/core";
+import { TestOutStep } from "@/components/test-out-step";
+import { derivePlanStatuses, isTestOutQuestion } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
@@ -512,7 +514,7 @@ export function Chat({
 	// A pending question can never precede its phase's seam in the transcript (the teacher's turn
 	// ends at the question call), so the session's current phase IS the
 	// question's phase.
-	const requiresReveal = pending !== null && questionNeedsReveal(pending.tool, pending.input, phaseAt3(messages));
+	const requiresReveal = pending !== null && !isTestOutQuestion(nativeMessages, pending.toolCallId) && questionNeedsReveal(pending.tool, pending.input, phaseAt3(messages));
 
 	/* The READING-THINKING channel (owner 2026-10-03): a draft field for
 	 * thinking while reading the teaching prose, mounted while a check waits
@@ -909,6 +911,11 @@ export function Chat({
 	// The session's live plan (drives the top-bar chip; the marginalia
 	// derives its own from the same transcript).
 	const planTree = useMemo(() => latestTree(messages), [messages]);
+	const currentStep = useMemo(() => {
+		if (!planTree || kind === "practice") return undefined;
+		const current = derivePlanStatuses(planTree, messages).current;
+		return planTree.nodes.find((n) => n.id === current);
+	}, [planTree, messages, kind]);
 
 	// ── Session usage (wave-4 stats bar) ──
 	// The money channel: the record's turns log and read-time server Pi
@@ -1691,6 +1698,12 @@ export function Chat({
 					chatId={chatId}
 					onModelChange={setSelectedModel}
 					plan={hasPlan ? <PlanMarginalia messages={messages} /> : undefined}
+					stepAction={currentStep && <TestOutStep node={currentStep} disabled={busy || compacting} onTest={(text) => {
+						if (busy || compacting) return;
+						if (zeroKeys) { setSetupOpen(true); return; }
+						if (selectedModelUnavailable(catalog, selectedModel)) { openModelPicker(); return; }
+						void send({ type: "text", text });
+					}} />}
 					onOpenPlan={() => setPlanOpen(true)}
 					requiresReveal={requiresReveal}
 					readingThinking={readingThinking}
@@ -1934,6 +1947,7 @@ function DockOverlay({
 	onModelChange,
 	onReserve,
 	plan,
+	stepAction,
 	onOpenPlan,
 	dictationSlot,
 	dictationCancel,
@@ -1977,6 +1991,7 @@ function DockOverlay({
 	/** The plan marginalia's content (the bare diagram) — rendered only
 	 *  while a question owns the band. Null until a plan exists. */
 	plan?: React.ReactNode;
+	stepAction?: React.ReactNode;
 	/** Opens the full-DAG popup (the marginalia + chip share it). */
 	onOpenPlan: () => void;
 	/** The dictation strip (STT wave): rendered in the stats bar's middle
@@ -2347,6 +2362,7 @@ function DockOverlay({
 					{/* Pocket mode: connecting models is a settings job, so no setup
 					    button on a phone (the draft screen says "on the Mac"). */}
 					{setupCta && <div className="contents max-sm:hidden">{setupCta}</div>}
+					{stepAction}
 					{/* The queued-steer indicator (owner spec 2026-10-03): quiet
 					    one-liners above the shell - right-aligned to where its corner
 					    rounding starts, truncated, no background, no container. A

@@ -10,6 +10,14 @@
 // A session-scoped dependency tree authored by the teacher via plan tools.
 // One substrate with the global graph: tree nodes fold into graph nodes.
 
+export type PlanGroup = "already-yours" | "to-build" | "optional";
+
+export const PLAN_GROUP_LABELS: Record<PlanGroup, string> = {
+	"already-yours": "Already yours",
+	"to-build": "To build",
+	optional: "Optional",
+};
+
 export interface PlanNode {
 	/** Opaque, agent-chosen slug, stable across edits: "chain-rule-intuition". */
 	id: string;
@@ -17,6 +25,10 @@ export interface PlanNode {
 	title: string;
 	/** 1-2 sentences: what this node covers. */
 	summary?: string;
+	/** Teaching scope, independent of current/visited position. */
+	group?: PlanGroup;
+	/** Exact area names in the probe verdict that informed this node. */
+	probeStrands?: string[];
 }
 
 export interface PlanEdge {

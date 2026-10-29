@@ -17,10 +17,14 @@
 
 import { Type, type Static } from "typebox";
 
+export type ProbeStatus = "hold" | "shaky" | "gap";
+
 /** One dependency strand the planned lesson will rest on. */
 export interface ProbeStrand {
 	/** Name/description of the strand (e.g. "the derivative as a limit"). */
 	strand: string;
+	/** Medical verdict. Absent only in sessions recorded before Phase 9. */
+	status?: ProbeStatus;
 	/** Free-form: where the learner's edge sits on this strand — floor,
 	 *  ceiling, misconceptions found, what to build from. */
 	assessment: string;
@@ -38,17 +42,20 @@ export interface ProbeDoneInput {
 	assessment: ProbeAssessment;
 }
 
-// The TypeBox schema of that input — SINGLE SOURCE OF TRUTH, lived by the
-// tool (src/agent/tools/probe.ts) and by the UI parse seam (src/core/tool-parts.ts):
-// the boundary validation and the consumer parse run literally the same
-// schema, so "schema-valid at the boundary" ⇔ "parseable by a consumer" is
-// structural, not a convention. (Live crash 2026-09-12: the model sent
+// Shared TypeBox input shape. The medical authoring schema below makes
+// status mandatory; the display schema also reads historical assessments
+// without inventing a verdict. Both use the same status enum and fields. (Live crash 2026-09-12: the model sent
 // `assessment` as a STRING; the card cast it and died on `.strands.map`.)
+export const probeStatusSchema = Type.Union([Type.Literal("hold"), Type.Literal("shaky"), Type.Literal("gap")], {
+	description: "Your verdict from the existing probe: hold = reliably understood; shaky = partial or unsure; gap = missing understanding. Do not ask extra questions to fill this field.",
+});
+
 export const probeDoneInputSchema = Type.Object({
 	assessment: Type.Object(
 		{
 			strands: Type.Array(
 				Type.Object({
+					status: Type.Optional(probeStatusSchema),
 					strand: Type.String({
 						description:
 							"The dependency strand (e.g. 'the derivative as a limit') — a name the plan can hang a node on.",
@@ -69,6 +76,18 @@ export const probeDoneInputSchema = Type.Object({
 		},
 		{ description: "The learner assessment — the probe's distilled output." },
 	),
+});
+
+/** New medical conclusions require a verdict; historical transcript reads
+ * keep accepting the original shape without inventing a verdict. */
+export const medicalProbeDoneInputSchema = Type.Object({
+	assessment: Type.Object({
+		...probeDoneInputSchema.properties.assessment.properties,
+		strands: Type.Array(Type.Object({
+			...probeDoneInputSchema.properties.assessment.properties.strands.items.properties,
+			status: probeStatusSchema,
+		}), { minItems: 1 }),
+	}),
 });
 
 /** Schema ↔ interface lock (the old `satisfies z.ZodType` guarantee): the

@@ -41,7 +41,7 @@ function newChat(title: string): string {
 
 const ASSESSMENT = {
 	strands: [
-		{ strand: "the derivative as a limit", assessment: "Floor: slope intuition. Ceiling: formal ε–δ." },
+		{ strand: "the derivative as a limit", status: "shaky", assessment: "Floor: slope intuition. Ceiling: formal ε–δ." },
 	],
 	summary: "Enter at the formal definition.",
 };

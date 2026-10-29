@@ -241,6 +241,73 @@ describe("extension page adapter (local fixture only)", () => {
       assert.doesNotMatch(result.text, /sources:|101|102,103/);
     }
   });
+  function rightPanePage() {
+    const { document } = page();
+    document.querySelector("#answers")!.innerHTML = answerFixture;
+    document.body.insertAdjacentHTML("beforeend", readFileSync(new URL("./fixtures/extension/expert-ai-right-pane.html", import.meta.url), "utf8"));
+    Object.defineProperty(document, "defaultView", { configurable: true, value: {
+      getComputedStyle: (element: HTMLElement) => ({ display: "block", visibility: element.style.visibility || "visible" }),
+    } });
+    for (const element of document.querySelectorAll<HTMLElement>("*")) {
+      element.getClientRects = () => [{ width: 428, height: element.matches(".ec-modal") ? 0 : 20 }] as unknown as DOMRectList;
+    }
+    const container = answerContainer(document)!;
+    const button = container.querySelector<HTMLElement>(EXPERT_PAGE.sourcesButton)!;
+    const pane = document.querySelector<HTMLElement>('[data-e2e="right-content-pane-slide-container"]')!;
+    let opened = 0; let closed = 0;
+    function showPane() {
+      pane.style.visibility = "visible";
+      pane.classList.add("right-content-pane-slide-container--open_fixture");
+      pane.querySelector('[class*="source-text-line--topic-ti"]')!.textContent = "Current generic topic";
+      pane.querySelector('[class*="source-text-line--section-"]')!.textContent = "Current section";
+      button.setAttribute("aria-pressed", "true");
+    }
+    button.addEventListener("click", () => { opened++; showPane(); });
+    pane.querySelector('[data-e2e="right-content-pane-close-btn"]')!.addEventListener("click", () => {
+      closed++; pane.style.visibility = "hidden";
+      pane.classList.remove("right-content-pane-slide-container--open_fixture");
+      button.setAttribute("aria-pressed", "false");
+    });
+    pane.querySelector('[data-e2e="fab-expy-source-card-button"]')!.addEventListener("click", () => assert.fail("must not open individual sources"));
+    return { document, container, button, pane, showPane, clicks: () => ({ opened, closed }) };
+  }
+  for (const initiallyOpen of [false, true]) {
+    it(`reads the right pane when initially ${initiallyOpen ? "open" : "closed"} and restores its state`, async () => {
+      const h = rightPanePage();
+      if (initiallyOpen) h.showPane();
+      const result = await readAnswerWithSources(h.container, "https://example.org/local-fixture");
+      assert.deepEqual(result.references, [{ title: "Current generic topic", section: "Current section", type: "topic" }]);
+      assert.equal(h.pane.style.visibility, initiallyOpen ? "visible" : "hidden");
+      assert.equal(h.button.getAttribute("aria-pressed"), String(initiallyOpen));
+      assert.deepEqual(h.clicks(), { opened: initiallyOpen ? 0 : 1, closed: initiallyOpen ? 0 : 1 });
+      assert.ok(h.pane.querySelector('[data-e2e="fab-expy-source-card-button"]'), "closing retains cards");
+    });
+  }
+  it("ignores the closed right pane's stale cards while reading an open drawer", async () => {
+    const h = rightPanePage();
+    h.document.body.insertAdjacentHTML("beforeend", readFileSync(new URL("./fixtures/extension/expert-ai-sources.html", import.meta.url), "utf8"));
+    for (const element of h.document.querySelectorAll<HTMLElement>("*")) {
+      element.getClientRects = () => [{ width: 428, height: element.matches(".ec-modal") ? 0 : 20 }] as unknown as DOMRectList;
+    }
+    h.button.setAttribute("aria-pressed", "true");
+    const result = await readAnswerWithSources(h.container, "https://example.org/local-fixture");
+    assert.deepEqual(result.references.map((reference) => reference.title), ["Generic clinical topic", "Generic clinical topic"]);
+    assert.equal(h.pane.style.visibility, "hidden");
+    assert.deepEqual(h.clicks(), { opened: 0, closed: 0 });
+  });
+  it("refuses an open right pane belonging to another answer without changing it", async () => {
+    const h = rightPanePage(); h.showPane(); h.button.setAttribute("aria-pressed", "false");
+    await assert.rejects(readAnswerWithSources(h.container, "https://example.org/local-fixture"), /other answer/);
+    assert.equal(h.pane.style.visibility, "visible");
+    assert.deepEqual(h.clicks(), { opened: 0, closed: 0 });
+  });
+  it("rejects a changed answer and closes the right pane opened for Send", async () => {
+    const h = rightPanePage();
+    h.button.addEventListener("click", () => h.container.remove());
+    await assert.rejects(readAnswerWithSources(h.container, "https://example.org/local-fixture"), /answer changed/);
+    assert.equal(h.pane.style.visibility, "hidden");
+    assert.deepEqual(h.clicks(), { opened: 1, closed: 1 });
+  });
   it("preserves optional source IDs and safe links without opening the cards, and closes on parse failure", async () => {
     const sourceFixture = readFileSync(new URL("./fixtures/extension/expert-ai-sources.html", import.meta.url), "utf8");
     const { document } = page(); document.querySelector("#answers")!.innerHTML = answerFixture;

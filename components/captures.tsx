@@ -177,7 +177,7 @@ export function TonightsQuestions() {
 
 /** The capture box: a text area, the privacy reminder, Save and Save & start.
  *  16px text (text-base) so iOS Safari doesn't zoom the page on focus. */
-export function CaptureBox({ state }: { state: ReturnType<typeof useCaptures> }) {
+export function CaptureBox({ state, autoFocus = true }: { state: ReturnType<typeof useCaptures>; autoFocus?: boolean }) {
 	const [text, setText] = useState("");
 	const [saving, setSaving] = useState(false);
 	const areaRef = useRef<HTMLTextAreaElement>(null);
@@ -209,7 +209,7 @@ export function CaptureBox({ state }: { state: ReturnType<typeof useCaptures> })
 				onChange={(e) => setText(e.target.value)}
 				maxLength={MAX_CAPTURE_CHARS}
 				rows={4}
-				autoFocus
+				autoFocus={autoFocus}
 				placeholder="A question or topic to look at tonight…"
 				aria-label="Capture a question or topic"
 				className="w-full resize-none rounded-xl border bg-card p-3 text-base leading-snug outline-none placeholder:text-muted-foreground focus:border-muted-foreground/50"

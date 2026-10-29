@@ -18,7 +18,7 @@ export function CapturePage({ initialConfigured }: { initialConfigured: boolean 
 				<SidebarToggle />
 				<h1 className="font-ui text-sm uppercase tracking-wider text-muted-foreground">Capture</h1>
 			</header>
-			<main className="mx-auto flex w-full max-w-[34rem] flex-col gap-5 px-4 pb-10 pt-2">
+			<main className="mx-auto flex w-full max-w-[34rem] flex-col gap-5 px-4 pb-10 pt-2 max-sm:pb-28">
 				<CaptureBox state={state} />
 				{state.error && <p role="alert" className="text-sm text-destructive">{state.error}</p>}
 				<section aria-label="Tonight's questions" className="flex flex-col gap-2">

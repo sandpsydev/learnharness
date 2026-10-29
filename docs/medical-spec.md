@@ -82,6 +82,20 @@ The existing graph (propositions + reasoning chains, linked to their sessions) i
 - Teacher grounds settled-tier teaching on the learner's books when relevant and cites `book p.N` when it does.
 - Indexing a large textbook takes a few minutes once, with a progress bar; no money cost.
 
+## Phase 7 — Explain my miss (owner-approved 2026-10-29)
+
+You bring in a question-bank question you got wrong (UWorld, AMBOSS, NL past papers). The tutor finds the one gap behind the miss, teaches only that gap, and checks it with a twin question.
+
+- **Entry:** an "Explain my miss" action on the new-session screen starts a teaching session (kind `teach`, so graph extraction runs as normal) in the miss flow. **One missed question per session** (owner decision).
+- **Input (owner decision: both):** paste the question text, or paste a screenshot straight into the chat box with Cmd+V. A pasted image is saved into the data dir and attached through upstream's file-attachment and image path, so the model sees it. Dragging a screenshot file in also works. The learner says which option they chose. The correct answer and the bank's explanation are optional. A pasted explanation is just another source: management claims in it still follow the accuracy tiers (1.2).
+- **Flow:**
+  1. Read the question, then ask why you picked your answer: one short question, with a follow-up only if needed. Never explain before hearing your reasoning.
+  2. Name the root gap in one line, using the practice miss classes in plain words: missed a clue in the stem (cue), confused look-alikes (discrimination), knew it but slipped in the steps (execution), careless, or missing underlying knowledge (structural).
+  3. Teach only that gap, with the normal teacher method: derive, end at the bedside, a look-alike hook for discrimination misses, accuracy tiers and citations for management, and the library first where it's relevant.
+  4. **Twin question (owner decision):** one fresh single-best-answer vignette testing the same concept from a different angle, clickable A–E as in Phase 3. If it's missed, reteach once from the new angle.
+- **The bank's content:** it is never copied word for word into graph nodes, session titles or cards. Concepts are written in the tutor's own words. Question text and screenshots stay in the local data dir.
+- **Not included (owner decisions):** no batch mode, no automatic Anki offer (the existing session "Make Anki cards" action still works), no miss log.
+
 ## Repo / workflow
 
 - Public GitHub fork of `amosblomqvist/learnharness` under the owner's account; work on branch `medical` (the fork's default branch); `main` mirrors upstream and is merged into `medical` periodically.

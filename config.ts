@@ -29,6 +29,9 @@ export const PATHS = {
 	/** The PDF library (medical fork, Phase 6): one directory per book —
 	 *  the copied PDF, its chunks, its vectors. */
 	library: path.join(DATA_ROOT, "library"),
+	/** Images the learner pastes or drops into the chat box (Explain my miss
+	 *  and any other session): saved here, then attached by path. */
+	attachments: path.join(DATA_ROOT, "attachments"),
 	/** Local embedding model files (downloaded once, then offline). */
 	models: path.join(DATA_ROOT, "models"),
 	/** Debug artifacts (env-gated): data/debug/provider-events/<chatId>.jsonl

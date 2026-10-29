@@ -452,6 +452,10 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 			});
 			return;
 		}
+		case "miss-flow":
+			// Explain my miss: a signal for the model only — the transcript
+			// starts at the learner's own first message.
+			return;
 		case "problem-dismissed":
 			// UI-only (the ask-style dismissal): the synthesized conclude
 			// pair — which rides the NEXT input — carries the record's face.

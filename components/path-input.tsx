@@ -3,6 +3,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { FilePathChip } from "./file-path-chip";
+import { ATTACH_FAILED, imageFilesOf, saveImageFiles } from "./image-attach";
 import { cn } from "../lib/utils";
 import {
 	adjacentPathRange, atomicPathRange, clampPathSelection, insertFilePaths,
@@ -20,6 +21,11 @@ export type PathInputProps = Omit<React.HTMLAttributes<HTMLDivElement>, "childre
 	defaultDropTarget?: boolean;
 	/** Native text-input semantics: strip CR/LF and leave Enter to the caller. */
 	singleLine?: boolean;
+	/** Cmd+V of a screenshot: save the image into the data dir and attach
+	 *  its path like a dropped file. Text on the clipboard always wins. */
+	pasteImages?: boolean;
+	/** A pasted image could not be attached (too large, wrong type, …). */
+	onAttachError?: (message: string) => void;
 };
 
 type ChipHost = { host: HTMLElement; path: string };
@@ -33,13 +39,13 @@ type Controller = {
  * views of it. React never reconciles the editable DOM after a native mutation.
  */
 export const PathInput = React.forwardRef<HTMLDivElement, PathInputProps>(function PathInput({
-	value, onValueChange, placeholder, autoFocus, defaultDropTarget = false, singleLine = false, className,
+	value, onValueChange, placeholder, autoFocus, defaultDropTarget = false, singleLine = false, pasteImages = false, onAttachError, className,
 	onKeyDown, onFocus, onBlur, onInput, onPaste, onCopy, onCut,
 	onCompositionStart, onCompositionEnd, ...props
 }, forwardedRef) {
 	const rootRef = React.useRef<HTMLDivElement>(null);
 	const controllerRef = React.useRef<Controller | null>(null);
-	const callbacks = React.useRef({ onValueChange, singleLine });
+	const callbacks = React.useRef({ onValueChange, singleLine, pasteImages, onAttachError });
 	const composing = React.useRef(false);
 	const [chips, setChips] = React.useState<ChipHost[]>([]);
 	// Keep this text child immutable: SSR/hydration gets the complete draft,
@@ -47,7 +53,7 @@ export const PathInput = React.forwardRef<HTMLDivElement, PathInputProps>(functi
 	const initial = React.useRef({ value: normalizePathInputValue(value, singleLine), autoFocus, singleLine });
 
 	React.useImperativeHandle(forwardedRef, () => rootRef.current!, []);
-	React.useLayoutEffect(() => { callbacks.current = { onValueChange, singleLine }; }, [onValueChange, singleLine]);
+	React.useLayoutEffect(() => { callbacks.current = { onValueChange, singleLine, pasteImages, onAttachError }; }, [onValueChange, singleLine, pasteImages, onAttachError]);
 
 	React.useLayoutEffect(() => {
 		const root = rootRef.current!;
@@ -175,6 +181,16 @@ export const PathInput = React.forwardRef<HTMLDivElement, PathInputProps>(functi
 			if (event.defaultPrevented) return;
 			event.preventDefault();
 			const text = event.clipboardData?.getData("text/plain") ?? "";
+			// A pasted screenshot has no text: save it and attach its path.
+			const images = callbacks.current.pasteImages && text === "" ? imageFilesOf(event.clipboardData?.files) : [];
+			if (images.length > 0) {
+				void saveImageFiles(images).then(({ paths, error }) => {
+					if (!mounted) return;
+					if (paths.length > 0) stage(paths);
+					if (error) callbacks.current.onAttachError?.(error);
+				}).catch(() => { if (mounted) callbacks.current.onAttachError?.(ATTACH_FAILED); });
+				return;
+			}
 			// Image/file/HTML-only clipboard contents are not text replacement.
 			if (text === "") return;
 			if (composing.current) pendingPaste.push(text);

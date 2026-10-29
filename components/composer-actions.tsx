@@ -1,18 +1,19 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { DumbbellIcon } from "lucide-react";
+import { ClipboardXIcon, DumbbellIcon, XIcon } from "lucide-react";
 
 /** Home and the draft share one wrapping action row. Picker controls lead;
  * setup is centered only when it is the sole action. */
-export function ComposerActions({ picker, setup }: { picker?: ReactNode; setup?: ReactNode }) {
-	if (!picker && !setup) return null;
+export function ComposerActions({ picker, action, setup }: { picker?: ReactNode; action?: ReactNode; setup?: ReactNode }) {
+	if (!picker && !action && !setup) return null;
 	return (
 		<div
 			data-testid="composer-actions"
-			className={`pointer-events-auto mb-2 flex flex-wrap items-center gap-2 ${picker ? "justify-start" : "justify-center"}`}
+			className={`pointer-events-auto mb-2 flex flex-wrap items-center gap-2 ${picker || action ? "justify-start" : "justify-center"}`}
 		>
 			{picker}
+			{action}
 			{setup}
 		</div>
 	);
@@ -51,6 +52,43 @@ export function NodePickerControl({ count, onOpen, onClear }: {
 					Clear
 				</button>
 			)}
+		</div>
+	);
+}
+
+/** The new-session screen's "Explain my miss" entry (Phase 7): starts the
+ * miss flow for one question-bank question the learner got wrong. */
+export function ExplainMissAction({ onOpen }: { onOpen?: () => void }) {
+	return (
+		<button
+			type="button"
+			data-testid="explain-miss-action"
+			onClick={onOpen}
+			className="flex cursor-pointer items-center gap-1.5 rounded-full border border-dashed border-border/80 bg-transparent px-3 py-1.5 font-ui text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+		>
+			<ClipboardXIcon aria-hidden="true" className="size-3.5" />
+			Explain my miss
+		</button>
+	);
+}
+
+/** Shown instead of the entry while the draft is in the miss flow. */
+export function ExplainMissActive({ onLeave }: { onLeave?: () => void }) {
+	return (
+		<div className="flex items-center gap-1.5" data-testid="explain-miss-active">
+			<span className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground">
+				<ClipboardXIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />
+				Explain my miss
+			</span>
+			<button
+				type="button"
+				data-testid="explain-miss-leave"
+				aria-label="Leave Explain my miss"
+				onClick={onLeave}
+				className="cursor-pointer rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+			>
+				<XIcon aria-hidden="true" className="size-3.5" />
+			</button>
 		</div>
 	);
 }

@@ -24,6 +24,7 @@ import {
 	type AnkiCard,
 	type OrganSystem,
 } from "../../core/contracts.ts";
+import { copiesSource, verbatimProblem } from "../../core/miss-flow.ts";
 import type { PiEngine } from "../models.ts";
 import { healStringifiedArrays, runSubmitAgent } from "./submit-agent.ts";
 
@@ -107,6 +108,15 @@ sourced elsewhere.
 
 Submit ONE submit_cards call containing every card.`;
 
+/** Explain my miss (Phase 7): added to the instructions for cards drafted from a
+ *  miss session. The learner brought a question-bank question; cards keep the
+ *  medical idea, never the bank's wording. */
+export const ANKI_MAKER_MISS_NOTE = `
+
+This session started from a question-bank question the learner got wrong. Never copy the question bank: no part of that
+question's stem, its answer options, or the bank's own explanation may appear on a card. Teach the underlying idea in
+your own words, and write any vignette card as a new case, not a rewording of the bank's.`;
+
 /** Added to the instructions only when the library tools are given. */
 export const ANKI_MAKER_LIBRARY_NOTE = `
 
@@ -165,6 +175,8 @@ export async function runAnkiMaker(opts: {
 	title: string;
 	material: string;
 	hints?: MakerHints;
+	/** Explain my miss: runs of the question bank's text the cards must not repeat. */
+	bank?: ReadonlySet<string>;
 	/** Extra tools beside the submit call: the seam for library_search / library_read. */
 	extraTools?: Record<string, AgentTool<any>>;
 	signal: AbortSignal | undefined;
@@ -180,11 +192,16 @@ export async function runAnkiMaker(opts: {
 		validate: (cards) => {
 			const problems = cards.flatMap((card, i) => {
 				const problem = cardProblem(card);
-				return problem ? [`Card ${i + 1} (${card.type}): ${problem}`] : [];
+				if (problem) return [`Card ${i + 1} (${card.type}): ${problem}`];
+				return opts.bank && copiesSource(`${card.front}\n${card.back}`, opts.bank)
+					? [`Card ${i + 1} (${card.type}): ${verbatimProblem("This card")}`]
+					: [];
 			});
 			return problems.length > 0 ? problems.join(" ") : null;
 		},
-		systemPrompt: opts.extraTools ? ANKI_MAKER_INSTRUCTIONS + ANKI_MAKER_LIBRARY_NOTE : ANKI_MAKER_INSTRUCTIONS,
+		systemPrompt:
+			(opts.extraTools ? ANKI_MAKER_INSTRUCTIONS + ANKI_MAKER_LIBRARY_NOTE : ANKI_MAKER_INSTRUCTIONS) +
+			(opts.bank ? ANKI_MAKER_MISS_NOTE : ""),
 		// Looking things up takes turns; a plain draft needs only the submit and its fixes.
 		maxTurns: opts.extraTools ? 12 : undefined,
 		prompt: `Material: ${opts.title}\n\n${opts.material}`,

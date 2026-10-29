@@ -136,13 +136,16 @@ describe("practice MCQ selection and submission", () => {
 			await act(async () => render(false));
 			await act(async () => render());
 			assert.equal(choice("D").getAttribute("aria-pressed"), "true", "collapse preserves selection");
-			// Bypass React's value tracker to simulate real typing in linkedom.
-			const textarea = host.querySelector<HTMLTextAreaElement>("textarea")!;
-			await act(async () => {
-				Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "The clinical cue supports this mechanism.");
-				textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
-			});
-			assert.equal(textarea.value, "The clinical cue supports this mechanism.");
+			// The thinking field is a contenteditable PathInput: simulate native typing by replacing its text and firing "input".
+			const field = host.querySelector<HTMLElement>('[data-testid="practice-thinking-field"] [role="textbox"]')!;
+			const type = async (text: string) => {
+				await act(async () => {
+					field.replaceChildren(document.createTextNode(text));
+					field.dispatchEvent(new window.Event("input", { bubbles: true }));
+				});
+			};
+			await type("The clinical cue supports this mechanism.");
+			assert.equal(field.textContent, "The clinical cue supports this mechanism.");
 			await act(async () => render(true, true));
 			assert.equal(submit().disabled, true, "compaction gates answer submission");
 			await act(async () => render());
@@ -166,10 +169,7 @@ describe("practice MCQ selection and submission", () => {
 			await act(async () => choice("C").click());
 			await act(async () => choice("C").click());
 			assert.equal(choice("C").getAttribute("aria-pressed"), "false", "click again clears a selection for hint-only thinking");
-			await act(async () => {
-				Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "I am stuck on the separating feature.");
-				textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
-			});
+			await type("I am stuck on the separating feature.");
 			await act(async () => submit().click());
 			assert.equal(sent[2], "I am stuck on the separating feature.", "thinking without a choice remains a hint request");
 		} finally { await act(async () => root.unmount()); host.remove(); }

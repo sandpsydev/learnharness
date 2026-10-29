@@ -1,8 +1,11 @@
+import { formatVerifyReference } from "../src/core/contracts/verify";
+import type { VerifyReference } from "../src/core/contracts/verify";
 import { element, referenceLines, request } from "./ui";
 import { errorMessage } from "./types";
 import type { ActiveQuestion, Answer, QueueItem, SessionState } from "./types";
 let active: ActiveQuestion | undefined;
 let busy = false;
+let restoredReferences: VerifyReference[] = [];
 const value = (id: string) => element<HTMLInputElement | HTMLTextAreaElement>(id).value;
 function say(text: string) { element("notice").textContent = text; }
 function stateView(state: SessionState, restoreDraft = false) {
@@ -15,7 +18,8 @@ function stateView(state: SessionState, restoreDraft = false) {
     const { answer } = state.recovery;
     element<HTMLTextAreaElement>("answer").value = answer.text;
     element<HTMLInputElement>("source").value = answer.sourceUrl ?? "";
-    element<HTMLTextAreaElement>("references").value = answer.references.map((r) => r.url).join("\n");
+    restoredReferences = answer.references;
+    element<HTMLTextAreaElement>("references").value = answer.references.map(formatVerifyReference).join("\n");
   }
   if (restoreDraft && state.recovery?.kind === "highlight") {
     const { highlight } = state.recovery;
@@ -65,7 +69,7 @@ async function run(action: () => Promise<void>) {
   });
 }
 function answer(): Answer {
-  return { text: value("answer"), references: referenceLines(value("references")), ...(value("source").trim() ? { sourceUrl: value("source").trim() } : {}) };
+  return { text: value("answer"), references: referenceLines(value("references"), restoredReferences), ...(value("source").trim() ? { sourceUrl: value("source").trim() } : {}) };
 }
 async function sendAnswer(next: boolean) {
   if (!element<HTMLFormElement>("answer-form").reportValidity()) return;

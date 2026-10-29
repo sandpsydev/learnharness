@@ -357,6 +357,31 @@ describe("the verify loop", () => {
 		assert.equal(twice.status, 409);
 	});
 
+	it("accepts topic sources without URLs, delivers title/section citations and skips PubMed without IDs", async () => {
+		const chatId = newChat();
+		const [item] = verifyStore.addItems(chatId, [{ prompt: "Generic source question" }]);
+		const references = [{ title: "Generic clinical topic", section: "Initial approach", type: "topic" }];
+		const steers: Array<{ content: string }> = [];
+		const result = verifyServer.receiveAnswer(item!.id, { text: "Generic answer.", references });
+		assert.equal(result.ok, true);
+		await verifyServer.deliverAnswer(item!.id, {
+			fetchFn: (async () => { assert.fail("topic sources with no PMID/DOI must not call PubMed"); }) as never,
+			deliver: (async (s: { content: string }) => void steers.push(s)) as never,
+		});
+		assert.deepEqual(verifyStore.getItem(item!.id)!.answer!.references, references);
+		assert.match(steers[0]!.content, /Generic clinical topic — Initial approach/);
+		assert.match(steers[0]!.content, /topics are cited by title and section/);
+		assert.match(steers[0]!.content, /nothing to cross-check/);
+		assert.doesNotMatch(steers[0]!.content, /undefined/);
+	});
+
+	it("cross-checks explicit reference IDs even when a reference has no URL", async () => {
+		const chatId = newChat(); const [item] = verifyStore.addItems(chatId, [{ prompt: "Generic source ID question" }]);
+		verifyServer.receiveAnswer(item!.id, { text: "Generic answer.", references: [{ title: "Generic study", pmid: "10471", doi: "10.1056/NEJM199909023411001" }] });
+		await verifyServer.deliverAnswer(item!.id, { fetchFn: fakeNcbi(), deliver: (async () => {}) as never });
+		assert.deepEqual(verifyStore.getItem(item!.id)!.citationChecks?.map((c) => c.kind), ["pmid", "doi"]);
+	});
+
 	it("PubMed down → the brief says UNVERIFIED and the checks are not cached as a pass", async () => {
 		const chatId = newChat();
 		const [item] = verifyStore.addItems(chatId, [{ prompt: "Q-offline" }]);
@@ -375,6 +400,9 @@ describe("the verify loop", () => {
 		assert.equal((await post(item!.id, { text: "   " })).status, 400);
 		assert.equal((await post(item!.id, { text: "ok", references: [{ url: "javascript:alert(1)" }] })).status, 400);
 		assert.equal((await post(item!.id, { text: "ok", references: "nope" })).status, 400);
+		for (const reference of [{}, { title: "" }, { title: "Generic topic", section: 123 }, { title: "Generic topic", url: "javascript:alert(1)" }, { title: "Generic study", pmid: "not-an-id" }, { title: "Generic study", doi: "not-a-doi" }]) {
+			assert.equal((await post(item!.id, { text: "ok", references: [reference] })).status, 400);
+		}
 		assert.equal((await post(item!.id, { text: "ok", sourceUrl: "file:///etc/passwd" })).status, 400);
 		assert.equal((await post("vq_missing", { text: "ok" })).status, 404);
 		assert.equal(verifyStore.getItem(item!.id)!.status, "queued", "invalid answers change nothing");

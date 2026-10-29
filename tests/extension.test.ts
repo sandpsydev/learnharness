@@ -9,7 +9,7 @@ import { VerifyApi } from "../extension/api";
 import { DEFAULT_CONFIG, isExpertUrl, validateConfig } from "../extension/config";
 import { ExtensionController } from "../extension/controller";
 import type { ControllerPorts, PageResult } from "../extension/controller";
-import { EXPERT_PAGE, answerContainer, canSubmit, questionBox, conversationIsFresh, fillQuestion, readAnswer, startConversation, submitQuestion } from "../extension/expert-page";
+import { EXPERT_PAGE, answerContainer, canSubmit, questionBox, readAnswerWithSources, conversationIsFresh, fillQuestion, readAnswer, startConversation, submitQuestion } from "../extension/expert-page";
 import type { Answer, QueueItem, SessionState } from "../extension/types";
 import { referenceLines } from "../extension/ui";
 
@@ -123,6 +123,22 @@ describe("extension page adapter (local fixture only)", () => {
     fillQuestion(document, "Generic native edit");
     assert.equal(box.textContent, "Generic native edit");
   });
+  it("refuses to fill in another mode without clicking its dropdown", () => {
+    const { document, box } = page();
+    const mode = box.closest("form")!.querySelector('[data-e2e="output-mode-menu-trigger"]')!;
+    mode.textContent = "Other mode";
+    mode.addEventListener("click", () => assert.fail("must never click the mode dropdown"));
+    assert.throws(() => fillQuestion(document, "Generic question"), /Switch Expert AI to Standard, then retry/);
+    assert.equal(box.textContent, "");
+  });
+  it("gives popup-specific help while ignoring hidden modal shells", () => {
+    const { document } = page();
+    assert.ok(questionBox(document));
+    document.querySelector(".ec-welcome-modal")!.parentElement!.removeAttribute("hidden");
+    // Isolate the visible welcome popup from the signout shells.
+    document.querySelectorAll(EXPERT_PAGE.access).forEach((node) => node.setAttribute("hidden", ""));
+    assert.throws(() => questionBox(document), /Close the Expert AI pop-up, then retry/);
+  });
   it("requires an initial screen and an empty editor after starting a conversation", () => {
     const { document, box } = page();
     box.closest(EXPERT_PAGE.initialScreen)!.removeAttribute("data-e2e");
@@ -131,7 +147,7 @@ describe("extension page adapter (local fixture only)", () => {
     assert.throws(() => fillQuestion(document, "question"), /empty new conversation/);
   });
   it("stops for visible access modals, missing controls, and invisible tabs before a click", () => {
-    for (const scenario of ["sign-in", "missing-submit", "missing-new", "hidden", "unfocused", ...EXPERT_PAGE.access.split(", ")]) {
+    for (const scenario of ["sign-in", "missing-submit", "missing-new", "hidden", "unfocused", ...EXPERT_PAGE.access.split(", "), ...EXPERT_PAGE.popup.split(", ")]) {
       const { document } = page(); let clicks = 0;
       document.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => clicks++));
       if (scenario === "sign-in") document.querySelectorAll(EXPERT_PAGE.question).forEach((node) => node.remove());
@@ -140,7 +156,7 @@ describe("extension page adapter (local fixture only)", () => {
       if (scenario === "missing-new") document.querySelectorAll(`${EXPERT_PAGE.newConversation}, ${EXPERT_PAGE.sidebarNewConversation}`).forEach((node) => node.remove());
       if (scenario === "hidden") Object.defineProperty(document, "visibilityState", { value: "hidden" });
       if (scenario === "unfocused") document.hasFocus = () => false;
-      assert.throws(() => startConversation(document), /Sign in|unavailable|visible/);
+      assert.throws(() => startConversation(document), /Sign in|pop-up|unavailable|visible/);
       assert.equal(clicks, 0, scenario);
     }
   });
@@ -159,13 +175,63 @@ describe("extension page adapter (local fixture only)", () => {
     last.querySelector(EXPERT_PAGE.complete)!.remove();
     assert.equal(answerContainer(document), null, "older completed answer must not be returned");
   });
-  it("keeps drug names and citation IDs, drops nudges and chrome, and leaves references pending inspection", () => {
+  it("reads title/section sources outside the answer and restores the drawer's open state", async () => {
+    const sourceFixture = readFileSync(new URL("./fixtures/extension/expert-ai-sources.html", import.meta.url), "utf8");
+    for (const initiallyOpen of [false, true]) {
+      const { document } = page(); document.querySelector("#answers")!.innerHTML = answerFixture;
+      const container = answerContainer(document)!;
+      const button = container.querySelector(EXPERT_PAGE.sourcesButton)!;
+      let opened = 0; let closed = 0;
+      function installDrawer() {
+        document.body.insertAdjacentHTML("beforeend", sourceFixture);
+        document.querySelector(EXPERT_PAGE.drawerClose)!.addEventListener("click", () => {
+          closed++; document.querySelector(EXPERT_PAGE.drawer)!.remove(); button.setAttribute("aria-pressed", "false");
+        });
+        button.setAttribute("aria-pressed", "true");
+      }
+      button.addEventListener("click", () => { opened++; installDrawer(); });
+      if (initiallyOpen) installDrawer();
+      const result = await readAnswerWithSources(container, "https://example.org/local-fixture");
+      assert.deepEqual(result.references, [
+        { title: "Generic clinical topic", section: "Initial approach", type: "topic" },
+        { title: "Generic clinical topic", section: "Follow-up", type: "topic" },
+      ]);
+      assert.equal(Boolean(document.querySelector(EXPERT_PAGE.drawer)), initiallyOpen);
+      assert.equal(opened, initiallyOpen ? 0 : 1); assert.equal(closed, initiallyOpen ? 0 : 1);
+      assert.doesNotMatch(result.text, /sources:|101|102,103/);
+    }
+  });
+  it("preserves optional source IDs and safe links without opening the cards, and closes on parse failure", async () => {
+    const sourceFixture = readFileSync(new URL("./fixtures/extension/expert-ai-sources.html", import.meta.url), "utf8");
+    const { document } = page(); document.querySelector("#answers")!.innerHTML = answerFixture;
+    const container = answerContainer(document)!; const button = container.querySelector(EXPERT_PAGE.sourcesButton)!;
+    let malformed = false;
+    button.addEventListener("click", () => {
+      document.body.insertAdjacentHTML("beforeend", sourceFixture);
+      button.setAttribute("aria-pressed", "true");
+      const card = document.querySelector(EXPERT_PAGE.sourceCards)!;
+      if (malformed) {
+        card.removeAttribute("aria-label"); card.querySelector('[class*="topic-title"]')!.remove();
+      } else {
+        card.setAttribute("data-pmid", "12345"); card.setAttribute("data-doi", "10.1234/fixture");
+        card.insertAdjacentHTML("beforeend", '<a href="https://example.org/source">Link</a>');
+      }
+      card.addEventListener("click", () => assert.fail("individual source cards must not be opened"));
+      document.querySelector(EXPERT_PAGE.drawerClose)!.addEventListener("click", () => document.querySelector(EXPERT_PAGE.drawer)!.remove());
+    });
+    const result = await readAnswerWithSources(container, "https://example.org/local-fixture");
+    assert.equal(result.references[0]!.url, "https://example.org/source");
+    assert.equal(result.references[0]!.pmid, "12345"); assert.equal(result.references[0]!.doi, "10.1234/fixture");
+    malformed = true;
+    await assert.rejects(readAnswerWithSources(container, "https://example.org/local-fixture"), /source title/);
+    assert.equal(document.querySelector(EXPERT_PAGE.drawer), null);
+  });
+  it("keeps drug names, drops nudges and chrome, and omits unmapped citation IDs", () => {
     const { document } = page(); document.querySelector("#answers")!.innerHTML = answerFixture;
     const container = answerContainer(document)!;
     const result = readAnswer(container, "https://example.org/local-fixture");
     assert.match(result.text, /Example medicine/);
-    assert.match(result.text, /\[sources: 101\]/);
-    assert.match(result.text, /\[sources: 102,103\]/);
+    assert.doesNotMatch(result.text, /\[sources:|101|102,103/);
     assert.doesNotMatch(result.text, /Thinking|disclaimer|Suggested follow-up|Copy|Sources/);
     assert.deepEqual(result.references, []);
     assert.ok(container.querySelector('[data-e2e="nudge"]'), "reading must not mutate the page");
@@ -248,6 +314,17 @@ describe("extension learner-action controller", () => {
     options.fail = "";
     await h.controller.answer(answer, false);
     assert.equal(h.state().recovery, undefined);
+  });
+  it("keeps title/section sources in offline recovery, clipboard and editable reference lines", async () => {
+    const options = { fail: "queue/a/answer" }; const h = harness(options);
+    const topicAnswer: Answer = { text: "Generic answer", references: [{ title: "Generic topic", section: "Initial approach", type: "topic" }] };
+    await h.controller.ask("a");
+    await assert.rejects(h.controller.answer(topicAnswer, false), /not running/);
+    assert.deepEqual(h.state().recovery, { kind: "answer", answer: topicAnswer });
+    assert.match(h.copies[0]!, /Generic topic — Initial approach/);
+    assert.deepEqual(referenceLines("(topic) — Generic topic — Initial approach", topicAnswer.references), topicAnswer.references);
+    options.fail = ""; await h.controller.answer(topicAnswer, false);
+    assert.deepEqual(h.calls.at(-1)!.body, topicAnswer);
   });
   it("accepts manual copy/paste-back without submitting to any page", async () => {
     const h = harness(); await h.controller.manual("a");

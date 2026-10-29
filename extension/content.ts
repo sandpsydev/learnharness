@@ -1,4 +1,4 @@
-import { answerContainer, canSubmit, conversationIsFresh, fillQuestion, readAnswer, requireVisible, startConversation, submitQuestion } from "./expert-page";
+import { answerContainer, canSubmit, conversationIsFresh, fillQuestion, readAnswerWithSources, requireVisible, startConversation, submitQuestion } from "./expert-page";
 import { errorMessage } from "./types";
 import type { Reply } from "./types";
 
@@ -36,9 +36,10 @@ function attachControls() {
         requireVisible(document);
         const current = answerContainer(document);
         if (!current || current !== answer) throw new Error("The answer changed. Read it again before sending.");
-        const payload = readAnswer(current, location.href);
         returning = true;
         controls?.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+        status.textContent = "Reading sources…";
+        const payload = await readAnswerWithSources(current, location.href);
         status.textContent = "Sending…";
         const reply: Reply = await chrome.runtime.sendMessage({ type: "answer", answer: payload, next, requestId: binding.requestId });
         if (!reply.ok) throw new Error(reply.error);
@@ -55,7 +56,7 @@ function attachControls() {
   controls.append(makeButton("Send to LearnHarness", false), makeButton("Send & ask next", true), status);
   answer.after(controls);
 }
-async function waitUntil(check: () => boolean, ms = 4000) {
+async function waitUntil(check: () => boolean, ms = 10_000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     requireVisible(document);

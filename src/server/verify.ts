@@ -25,6 +25,7 @@ import {
 	buildHighlightBrief,
 	buildSubagentSteer,
 	extractCitationIds,
+	cleanVerifyReferences,
 	VERIFY_LIMITS,
 	type CitationCheck,
 	type JobRecord,
@@ -125,20 +126,6 @@ export function dismissItem(id: string): VerifyOutcome<VerifyItem> {
 
 // ─── payload validation (shared by the API and tests) ───────────────────────
 
-function cleanReferences(raw: unknown): VerifyReference[] | null {
-	if (raw === undefined) return [];
-	if (!Array.isArray(raw) || raw.length > VERIFY_LIMITS.maxReferences) return null;
-	const out: VerifyReference[] = [];
-	for (const r of raw) {
-		if (!r || typeof r !== "object") return null;
-		const { url, title } = r as { url?: unknown; title?: unknown };
-		if (typeof url !== "string" || !/^https?:\/\//i.test(url) || url.length > 2000) return null;
-		if (title !== undefined && typeof title !== "string") return null;
-		out.push({ url, ...(title ? { title: title.slice(0, 300) } : {}) });
-	}
-	return out;
-}
-
 function cleanText(raw: unknown, max: number): string | null {
 	if (typeof raw !== "string") return null;
 	const text = raw.trim();
@@ -165,8 +152,8 @@ export function receiveAnswer(id: string, body: unknown, now: Date = new Date())
 	if (!answerText) {
 		return { ok: false, code: "invalid", message: `"text" must be a non-empty string up to ${VERIFY_LIMITS.answerChars} characters.` };
 	}
-	const refs = cleanReferences(references);
-	if (!refs) return { ok: false, code: "invalid", message: `"references" must be an array of {url, title?} with http(s) urls (max ${VERIFY_LIMITS.maxReferences}).` };
+	const refs = cleanVerifyReferences(references);
+	if (!refs) return { ok: false, code: "invalid", message: `"references" must be an array of sources with a title or http(s) URL (max ${VERIFY_LIMITS.maxReferences}).` };
 	const source = httpUrl(sourceUrl);
 	if (source === null) return { ok: false, code: "invalid", message: '"sourceUrl" must be an http(s) URL.' };
 	const answer: VerifyAnswer = {
@@ -185,7 +172,7 @@ async function crosscheck(
 	answer: VerifyAnswer,
 	fetchFn: FetchLike | undefined,
 ): Promise<{ checks: CitationCheck[]; failed: boolean }> {
-	const ids = extractCitationIds(answer.text, ...answer.references.map((r) => r.url), ...answer.references.map((r) => r.title ?? ""));
+	const ids = extractCitationIds(answer.text, ...answer.references.flatMap((r) => [r.url ?? "", r.title ?? "", r.section ?? "", r.pmid ? `PMID ${r.pmid}` : "", r.doi ?? ""]));
 	if (ids.pmids.length === 0 && ids.dois.length === 0) return { checks: [], failed: false };
 	try {
 		const lookup = await Promise.race([
@@ -250,8 +237,8 @@ function sourcesFor(refs: readonly VerifyReference[], checks: readonly CitationC
 			out.push({ title, url });
 		}
 	};
-	if (extra) add(extra.title ?? extra.url, extra.url);
-	for (const r of refs) add(r.title ?? r.url, r.url);
+	if (extra?.url) add(extra.title ?? extra.url, extra.url);
+	for (const r of refs) if (r.url) add(r.title ?? r.url, r.url);
 	for (const c of checks) {
 		if (c.found && c.kind === "pmid") add(c.title ?? `PMID ${c.id}`, `https://pubmed.ncbi.nlm.nih.gov/${c.id}/`);
 	}
@@ -289,8 +276,8 @@ export function receiveHighlight(body: unknown, now: Date = new Date()): VerifyO
 	const page = httpUrl(url);
 	if (!page) return { ok: false, code: "invalid", message: '"url" must be the page\'s http(s) URL.' };
 	if (title !== undefined && typeof title !== "string") return { ok: false, code: "invalid", message: '"title" must be a string.' };
-	const refs = cleanReferences(references);
-	if (!refs) return { ok: false, code: "invalid", message: `"references" must be an array of {url, title?} with http(s) urls (max ${VERIFY_LIMITS.maxReferences}).` };
+	const refs = cleanVerifyReferences(references);
+	if (!refs) return { ok: false, code: "invalid", message: `"references" must be an array of sources with a title or http(s) URL (max ${VERIFY_LIMITS.maxReferences}).` };
 	const target = highlightTarget(chatId);
 	if (!target) return { ok: false, code: "conflict", message: "There is no session to send this to — start one in LearnHarness first." };
 	return {

@@ -4,7 +4,8 @@ import { VERIFY_LIMITS, cleanVerifyReferences, formatVerifyReference } from "../
 import { errorMessage } from "./types";
 import type { ActiveQuestion, Answer, Highlight, QueueItem, SessionState } from "./types";
 
-export interface PageResult { ok: boolean; submitted: boolean; error?: string }
+/** `untouched` means it is certain nothing was filled or submitted. */
+export interface PageResult { ok: boolean; submitted: boolean; untouched?: boolean; error?: string }
 export interface ControllerPorts {
   api(): Promise<VerifyApi>;
   read(): Promise<SessionState>;
@@ -12,6 +13,8 @@ export interface ControllerPorts {
   focusExpert(): Promise<number>;
   submit(tabId: number, item: QueueItem, requestId: string): Promise<PageResult>;
   clipboard(text: string): Promise<void>;
+  /** True only when the page provably never began filling this request. */
+  closeAttempt(requestId: string): Promise<boolean>;
 }
 function validateAnswer(answer: Answer) {
   if (!answer || typeof answer.text !== "string" || !answer.text.trim() || answer.text.length > VERIFY_LIMITS.answerChars) {
@@ -42,6 +45,14 @@ export class ExtensionController {
   ask(id?: string) { return this.exclusive(() => this.askOne(id)); }
   private async askOne(id?: string) {
     const state = await this.ports.read();
+    if (state.active?.phase === "starting") {
+      // The lock proves no attempt is running now, so a saved "starting" was cut off
+      // (for example by a worker restart). It may have sent the question.
+      state.active.phase = "uncertain";
+      const notice = "An earlier attempt was cut off. Check the Expert AI tab, then return its answer or release the question in the popup.";
+      await this.ports.write({ ...state, notice });
+      throw new Error(notice);
+    }
     if (state.active && !(state.active.phase === "manual" && state.active.item.id === id)) {
       throw new Error("Return the current answer first, or release the current question in the popup before asking another.");
     }
@@ -53,14 +64,24 @@ export class ExtensionController {
     const active: ActiveQuestion = { item, requestId: crypto.randomUUID(), phase: "starting" };
     await this.ports.write({ ...state, active, notice: "Opening your visible Expert AI tab…" });
     let result: PageResult;
+    let tabId: number;
     try {
-      active.tabId = await this.ports.focusExpert();
+      tabId = active.tabId = await this.ports.focusExpert();
       await this.ports.write({ ...state, active });
-      result = await this.ports.submit(active.tabId, item, active.requestId);
-    } catch {
-      // A lost message could mean the submit already happened. Never retry it.
-      result = { ok: false, submitted: true, error: "The tab did not confirm submission. Check it before manually pasting or retrying." };
+    } catch (error) {
+      result = { ok: false, submitted: false, untouched: true, error: errorMessage(error) };
+      return this.stopCleanly(state, result);
     }
+    try { result = await this.ports.submit(tabId, item, active.requestId); }
+    catch {
+      // A lost message could mean the submit already happened. Only the page
+      // never having asked to begin proves otherwise. Never retry the submit.
+      const untouched = await this.ports.closeAttempt(active.requestId).catch(() => false);
+      result = untouched
+        ? { ok: false, submitted: false, untouched: true, error: "The Expert AI tab stopped responding before anything was sent." }
+        : { ok: false, submitted: true, error: "The tab did not confirm submission. Check it before manually pasting or retrying." };
+    }
+    if (!result.ok && result.untouched && !result.submitted) return this.stopCleanly(state, result);
     if (!result.ok) {
       active.phase = result.submitted ? "uncertain" : "manual";
       const copied = await this.copy(item.prompt);
@@ -77,6 +98,12 @@ export class ExtensionController {
       throw error;
     }
     await this.ports.write({ ...state, active, notice: "Question submitted. Read the answer, then choose Send to LearnHarness." });
+  }
+  /** Nothing reached Expert AI: go back to how things were and leave the item queued. */
+  private async stopCleanly(before: SessionState, result: PageResult): Promise<never> {
+    const notice = `Nothing was sent to Expert AI and the question is still queued. If Expert AI asks you to sign in, sign in there, then click Ask in Expert AI again. (${result.error ?? "The page was not ready."})`;
+    await this.ports.write({ ...before, notice });
+    throw new Error(notice);
   }
   manual(id: string) { return this.exclusive(async () => {
     const state = await this.ports.read();

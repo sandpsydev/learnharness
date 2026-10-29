@@ -1,5 +1,6 @@
 import { VerifyApi } from "./api";
 import { DEFAULT_CONFIG, isExpertUrl, validateConfig } from "./config";
+import { Attempts } from "./attempts";
 import { ExtensionController } from "./controller";
 import { errorMessage } from "./types";
 import type { Config, QueueItem, Request, SessionState } from "./types";
@@ -39,28 +40,37 @@ async function focusExpert() {
   await chrome.tabs.update(tab.id, { active: true });
   return tab.id;
 }
+const attempts = new Attempts();
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function submit(tabId: number, item: QueueItem, requestId: string): Promise<PageResult> {
   // Wait for a newly opened visible tab's content script. Never retry a submit.
+  attempts.open(requestId, tabId);
   let connected = false;
   for (let attempt = 0; attempt < 30; attempt++) {
     const tab = await chrome.tabs.get(tabId);
     const win = await chrome.windows.get(tab.windowId);
-    if (!tab.active || !win.focused || !isExpertUrl(tab.url ?? "")) return { ok: false, submitted: false, error: "Keep the Expert AI tab visible and its window focused, then retry." };
+    if (!tab.active || !win.focused) return { ok: false, submitted: false, untouched: true, error: "Keep the Expert AI tab visible and its window focused, then retry." };
+    // A tab that is still opening has no committed URL yet; keep waiting for it.
+    if (tab.url && !isExpertUrl(tab.url)) return { ok: false, submitted: false, untouched: true, error: "The tab is not on Expert AI, which can happen at a sign-in screen." };
     try { connected = (await chrome.tabs.sendMessage(tabId, { type: "lh-ready" }, { frameId: 0 }))?.ok === true; } catch { /* Page still loading. */ }
     if (connected) break;
     await delay(400);
   }
-  if (!connected) return { ok: false, submitted: false, error: "The Expert AI tab is not ready. Reload it or use manual paste-back." };
+  if (!connected) return { ok: false, submitted: false, untouched: true, error: "The Expert AI tab is not ready. If it asks you to sign in, sign in there. Otherwise reload it or use manual paste-back." };
   return await chrome.tabs.sendMessage(tabId, { type: "lh-ask", prompt: item.prompt, requestId }, { frameId: 0 });
 }
-const controller = new ExtensionController({ api: async () => new VerifyApi(await config()), read, write, focusExpert, submit, clipboard });
+const controller = new ExtensionController({ api: async () => new VerifyApi(await config()), read, write, focusExpert, submit, clipboard, closeAttempt: async (requestId) => attempts.close(requestId) });
 const extensionPages = new Set([chrome.runtime.getURL("popup.html"), chrome.runtime.getURL("options.html")]);
 async function handle(message: Request, sender: chrome.runtime.MessageSender) {
   if (sender.id !== chrome.runtime.id) throw new Error("Unknown sender.");
   const ownPage = extensionPages.has(sender.url ?? "");
   // Content script has one narrowly scoped operation: return its bound answer.
   if (!ownPage) {
+    if (message.type === "begin") {
+      if (!sender.tab?.id || sender.frameId !== 0 || !isExpertUrl(sender.url ?? "") || typeof message.requestId !== "string") throw new Error("This operation is only available in the extension popup.");
+      if (!attempts.begin(message.requestId, sender.tab.id)) throw new Error("This question is no longer waiting for Expert AI. Click Ask in Expert AI again.");
+      return null;
+    }
     if (message.type !== "answer" || !sender.tab?.id || sender.frameId !== 0 || !isExpertUrl(sender.url ?? "") || typeof message.requestId !== "string") throw new Error("This operation is only available in the extension popup.");
     const tab = await chrome.tabs.get(sender.tab.id);
     const win = await chrome.windows.get(tab.windowId);

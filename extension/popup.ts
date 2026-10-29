@@ -13,7 +13,8 @@ function stateView(state: SessionState, restoreDraft = false) {
   element("active").hidden = !active;
   element("phase").textContent = active ? `${active.item.chatTitle}: ${describePhase(active.phase)}` : "";
   element("prompt").textContent = active?.item.prompt ?? "";
-  if (state.notice) say(state.notice);
+  if (state.automaticPaused) say(`Automatic Expert AI paused. ${state.automaticPaused} After fixing it, save extension settings with automatic mode on to resume. Manual controls remain available.`);
+  else if (state.notice) say(state.notice);
   if (restoreDraft && state.recovery?.kind === "answer") {
     const { answer } = state.recovery;
     element<HTMLTextAreaElement>("answer").value = answer.text;

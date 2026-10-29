@@ -17,10 +17,10 @@ type Listener = (message: unknown, sender: unknown, respond: (reply: unknown) =>
 type PageReply = { ok: boolean; submitted: boolean; untouched?: boolean; error?: string };
 const bundled = build({ entryPoints: [new URL("../extension/content.ts", import.meta.url).pathname], bundle: true, write: false, format: "iife", platform: "browser" });
 
-async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverSendable?: boolean; begin?: (request: unknown) => unknown } = {}) {
+async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverSendable?: boolean; background?: boolean; automatic?: boolean; begin?: (request: unknown) => unknown } = {}) {
   const { document, Event: FixtureEvent } = parseHTML(fixture);
-  Object.defineProperty(document, "visibilityState", { value: "visible" });
-  document.hasFocus = () => true;
+  Object.defineProperty(document, "visibilityState", { value: options.background ? "hidden" : "visible" });
+  document.hasFocus = () => !options.background;
   // Closed shells still have a browser client rectangle, but no height.
   document.querySelectorAll<HTMLElement>(".ec-modal").forEach((shell) => {
     shell.getClientRects = () => [{ width: 948, height: 0 }] as unknown as DOMRectList;
@@ -32,6 +32,7 @@ async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverS
     if (!options.neverSendable) box.closest("form")!.querySelector("button[type=submit]")!.removeAttribute("disabled");
   });
   const log: string[] = [];
+  const messages: unknown[] = [];
   box.addEventListener("input", () => log.push("fill"));
   box.closest("form")!.querySelector("button[type=submit]")!.addEventListener("click", () => log.push("submit"));
   if (options.signedOut) document.querySelectorAll('[contenteditable="true"]').forEach((node) => node.remove());
@@ -42,7 +43,7 @@ async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverS
   let now = 0;
   const compiled = await bundled;
   runInNewContext(compiled.outputFiles[0]!.text, {
-    document, InputEvent: FixtureEvent, Date: { now: () => now },
+    document, location: { href: "https://example.org/generic-fixture" }, InputEvent: FixtureEvent, Date: { now: () => now },
     MutationObserver: class {
       constructor(callback: () => void) { mutated = callback; }
       observe() {} disconnect() {}
@@ -54,15 +55,20 @@ async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverS
     clearTimeout(id: number) { timers.delete(id); },
     chrome: { runtime: { id: "local-fixture", onMessage: { addListener(callback: Listener) { listener = callback; } },
       sendMessage(request: { type: string }) {
-        if (request.type !== "begin") assert.fail("no automatic answer return");
+        messages.push(request);
+        if (request.type === "auto-ready") { log.push("ready"); return Promise.resolve({ ok: true }); }
+        if (request.type !== "begin") assert.fail("unexpected message");
         log.push("begin");
         return Promise.resolve(options.begin ? options.begin(request) : { ok: true, data: null });
       } } },
   });
   const ask = (requestId = "fixture-request") => new Promise<PageReply>((resolve) => {
-    assert.equal(listener({ type: "lh-ask", requestId, prompt: "Generic question" }, { id: "local-fixture" }, (reply) => resolve(reply as PageReply)), true);
+    assert.equal(listener({ type: "lh-ask", requestId, prompt: "Generic question", automatic: options.automatic }, { id: "local-fixture" }, (reply) => resolve(reply as PageReply)), true);
   });
-  return { document, log, timers, mutated: () => mutated(), ask, listener: () => listener };
+  const collect = (requestId = "fixture-request") => new Promise<{ ok: boolean; answer?: { text: string; references: unknown[] }; error?: string }>((resolve) => {
+    listener({ type: "lh-collect", requestId }, { id: "local-fixture" }, (reply) => resolve(reply as { ok: boolean }));
+  });
+  return { document, log, messages, collect, timers, mutated: () => mutated(), ask, listener: () => listener };
 }
 
 test("content script times out to manual return and still accepts a later completion signal", async () => {
@@ -132,4 +138,54 @@ test("a sign-in screen ends the attempt cleanly and the next question can be ask
   assert.equal(state.active, undefined);
   assert.deepEqual(calls, [], "the app is never told the question was asked");
   await assert.rejects(controller.ask("b"), /sign in/i, "the next question is allowed to try");
+});
+
+
+test("automatic content fills and collects answer plus sources in a hidden unfocused document", async () => {
+  const h = await load({ automatic: true, background: true });
+  assert.equal((await h.ask()).ok, true);
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(h.log, ["begin", "fill", "submit"]);
+  assert.equal((await h.collect()).answer, undefined, "streaming is not a completed answer");
+  await new Promise((r) => setImmediate(r));
+  h.document.querySelector("#answers")!.innerHTML = answerHtml;
+  const button = h.document.querySelector('[class*="sources-button_"]')!;
+  button.addEventListener("click", () => {
+    h.document.body.insertAdjacentHTML("beforeend", readFileSync(new URL("./fixtures/extension/expert-ai-sources.html", import.meta.url), "utf8"));
+    button.setAttribute("aria-pressed", "true");
+    h.document.querySelector('[data-e2e="drawer-close-btn"]')!.addEventListener("click", () => {
+      h.document.querySelector('[data-e2e="fab-expy-sources-drawer"]')!.remove();
+      button.setAttribute("aria-pressed", "false");
+    });
+  });
+  h.mutated();
+  assert.equal(h.log.at(-1), "ready", "completion wakes worker with no learner click");
+  const result = await h.collect();
+  assert.equal(result.ok, true);
+  assert.match(result.answer!.text, /Example medicine/);
+  assert.equal(result.answer!.references.length, 2);
+  assert.equal(h.document.querySelector('[data-e2e="fab-expy-sources-drawer"]'), null, "drawer restored");
+  assert.deepEqual(JSON.parse(JSON.stringify(h.messages)), [
+    { type: "begin", requestId: "fixture-request" },
+    { type: "auto-ready", requestId: "fixture-request" },
+  ]);
+  assert.equal((await h.collect("stale-request")).ok, false);
+  assert.equal(h.log.filter((entry) => entry === "submit").length, 1);
+});
+
+test("automatic hidden sign-in failure leaves the page untouched", async () => {
+  const h = await load({ automatic: true, background: true, signedOut: true });
+  const result = await h.ask();
+  assert.equal(result.untouched, true);
+  assert.equal(result.submitted, false);
+  assert.match(result.error!, /Sign in/);
+  assert.deepEqual(h.log, []);
+});
+
+test("manual content still refuses hidden unfocused runs", async () => {
+  const h = await load({ background: true });
+  const result = await h.ask();
+  assert.equal(result.untouched, true);
+  assert.match(result.error!, /visible.*focused/);
+  assert.deepEqual(h.log, []);
 });

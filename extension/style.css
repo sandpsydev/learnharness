@@ -7,6 +7,7 @@ section, details { margin-top: 18px; border-top: 1px solid GrayText; padding-top
 article { padding: 12px 0; border-bottom: 1px solid GrayText; }
 label { display: block; margin-top: 12px; font-weight: 600; }
 input, textarea { display: block; box-sizing: border-box; width: 100%; padding: 8px; font: inherit; }
+input[type="checkbox"] { display: inline-block; width: auto; margin-right: 8px; }
 textarea { resize: vertical; } button { padding: 7px 10px; margin: 6px 6px 6px 0; font: inherit; cursor: pointer; }
 button:disabled { cursor: wait; opacity: .6; } .prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
 .note { font-size: 12px; color: GrayText; } #notice { overflow-wrap: anywhere; } summary { cursor: pointer; }

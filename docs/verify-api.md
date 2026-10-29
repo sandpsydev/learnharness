@@ -2,7 +2,7 @@
 
 The local API the LearnHarness browser extension (`med-extension`) talks to. It is how the Expert AI question queue gets out of the app and how answers and highlighted text get back in. Code: `src/server/verify-api.ts` (transport + guard), `src/server/verify.ts` (what each call does), `src/core/contracts/verify.ts` (shapes). Spec: `docs/medical-spec.md`, "UpToDate Expert AI loop".
 
-**The line this API keeps:** the app never queries UpToDate. Every question is run by the extension, one at a time, from the learner's click, in the learner's own logged-in Expert AI tab. This API only hands out the questions and takes the answers back.
+**The loop:** this API hands out screened questions and accepts answers. The paired extension runs one question at a time, automatically in its managed background tab when enabled, or through the learner's manual controls. The app server does not contact UpToDate directly.
 
 ## Where it listens
 
@@ -42,7 +42,7 @@ Is the app up, and is this extension paired?
 
 ### `GET /v1/queue`
 
-The questions waiting to be run, oldest first — `queued` ones, then any `asked` ones the learner may want to re-run (a closed tab, say). Across all sessions.
+The questions waiting to be run, oldest first — `queued` ones, then `asked` ones for manual recovery. Across all sessions. Automatic discovery selects only `queued` items; uncertain submissions are never automatically selected again.
 
 ```json
 {
@@ -60,11 +60,11 @@ The questions waiting to be run, oldest first — `queued` ones, then any `asked
 }
 ```
 
-`prompt` is complete and self-contained: paste it as-is into a fresh Expert AI conversation. It contains no patient identifiers (the app refuses to queue any that look like one — but still treat the text as the learner's to review before it is sent).
+`prompt` is complete and self-contained: paste it as-is into a fresh Expert AI conversation. It contains no patient identifiers (the app refuses to queue any that look like one; the extension checks again before automatic sending).
 
 ### `POST /v1/queue/:id/asked`
 
-The extension has filled the prompt into the page (the learner clicked). Marks the item `asked`. No body needed (`{}`).
+The extension has submitted the prompt, automatically or through a manual Ask. Marks the item `asked`. No body needed (`{}`).
 
 ```json
 { "ok": true, "id": "vq_…", "status": "asked" }
@@ -74,7 +74,7 @@ The extension has filled the prompt into the page (the learner clicked). Marks t
 
 ### `POST /v1/queue/:id/answer`
 
-The learner pressed *Send to LearnHarness* next to the answer.
+The extension detected a completed answer for automatic return, or the learner chose *Send to LearnHarness* / manual paste-back.
 
 ```json
 {
@@ -130,8 +130,8 @@ The teacher receives the text as evidence from that page and cites it by title a
 
 ## Notes for the extension
 
-- Ask exactly one question at a time and only from a learner action; never from a background or hidden tab.
-- The queue can change while the extension is open (the teacher appends mid-session): re-fetch `GET /v1/queue` when the popup opens and after each send.
+- Ask exactly one question at a time. Automatic runs use an extension-managed background tab without focusing the learner's window. Manual actions keep their visibility/focus checks. Keep Standard mode and never retry an uncertain submission.
+- The queue can change mid-session: automatic mode uses Chrome alarms to re-fetch `GET /v1/queue` with the popup closed and after worker sleep. Manual popup refresh remains available.
 - If the Expert AI page shows a sign-in or access screen, do nothing and leave the item `queued` (do not call `/asked`).
-- Calls may fail because the app is closed. Treat any network error as "LearnHarness is not running" and keep the answer on the clipboard as the spec's fallback.
+- Calls may fail because the app is closed. Before any question starts, retry the local queue check on later alarms. Retain failed answer returns for recovery and pause automatic mode; manual failures also attempt clipboard fallback. Automatic mode leaves the clipboard alone.
 - Stability: additive changes (new optional fields) keep `apiVersion` at 1; anything breaking bumps it.

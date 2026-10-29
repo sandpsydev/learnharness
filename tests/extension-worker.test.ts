@@ -21,7 +21,8 @@ it("worker keeps pairing data private and sends context-menu selections through 
   }
   const chrome = {
     storage: { local: area("local", local), session: area("session", session) },
-    runtime: { id, getURL: (file: string) => base + file, onMessage: { addListener: (fn: (...args: any[]) => any) => { listeners.message = fn; } }, onInstalled: { addListener: (fn: () => void) => { listeners.installed = fn; } } },
+    runtime: { id, getURL: (file: string) => base + file, onMessage: { addListener: (fn: (...args: any[]) => any) => { listeners.message = fn; } }, onStartup: { addListener() {} }, onInstalled: { addListener: (fn: () => void) => { listeners.installed = fn; } } },
+    alarms: { async get() { return undefined; }, async create() {}, onAlarm: { addListener() {} } },
     action: { async setBadgeText() {}, async setTitle() {} },
     contextMenus: { removeAll(fn: () => void) { fn(); }, create() {}, onClicked: { addListener: (fn: (...args: any[]) => any) => { listeners.selection = fn; } } },
     commands: { onCommand: { addListener() {} } },

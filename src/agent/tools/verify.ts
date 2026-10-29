@@ -11,9 +11,9 @@ import type { SearchStatus } from "../../core/search.ts";
  *
  *   verify_queue     — write questions for UpToDate Expert AI into the
  *                      learner's queue (plan time AND mid-session), or list
- *                      the queue. The app NEVER asks UpToDate itself: the
- *                      learner's browser extension runs each question by the
- *                      learner's own click and sends the answer back, which
+ *                      the queue. The paired browser extension runs each question
+ *                      automatically when enabled, with manual controls too,
+ *                      and sends the answer back, which
  *                      arrives in the lesson as a message (src/server/verify.ts).
  *   evidence_sources — which of the three evidence routes are usable right
  *                      now (extension, web search, literature), so the
@@ -69,7 +69,7 @@ function line(item: VerifyItem): { id: string; status: string; prompt: string; c
 }
 
 const PROVISIONAL_REMINDER =
-	"Queued. The learner runs these one at a time, by their own click, whenever they choose — teaching continues now, nothing waits. " +
+	"Queued. The paired browser extension asks these one at a time and returns finished answers automatically when automatic mode is enabled. Manual controls remain available. Teaching continues now, nothing waits. " +
 	"Until an answer arrives, mark each related management claim as provisional in the lesson (e.g. “(provisional — awaiting UpToDate Expert AI)”). " +
 	"When the answer arrives it comes back as a message: compare, correct what differs, and cite it.";
 
@@ -111,7 +111,7 @@ export function verifyTools(ctx: VerifyToolContext): Record<string, AgentTool<an
 			description:
 				"Queue questions for UpToDate Expert AI — the main source for MANAGEMENT principles and clinical judgement (approach to X, first-line choice and why, " +
 				"nuanced comparisons). Write the lesson's questions up front when you plan, and append more as the session raises them. " +
-				"The learner's browser extension runs each one on the learner's click and sends the answer back; this call never waits for it. " +
+				"The paired browser extension asks each one and returns its finished answer automatically when automatic mode is enabled; manual controls remain available. This call never waits for it. " +
 				"Call with no `questions` to list this session's queue. Prompts must be self-contained and contain no identifiers.",
 			parameters: queueInput,
 			execute: async (toolCallId, params, signal) => {
@@ -142,7 +142,7 @@ export function verifyTools(ctx: VerifyToolContext): Record<string, AgentTool<an
 				const queued = ctx.verifyStore.listItems({ chatId: ctx.chatId, status: ["queued", "asked"] }).length;
 				return {
 					expertAi: {
-						route: "verify_queue → the learner's browser extension, on the learner's click",
+						route: "verify_queue → the paired browser extension, automatically when enabled (manual controls also available)",
 						extensionLastSeen: seen,
 						note: seen
 							? "The extension has contacted the app this run."

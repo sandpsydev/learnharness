@@ -135,6 +135,12 @@ Goal: harder and faster. Time goes where the learner's understanding is thin, an
 
 Undecided details are the crew's call, listed in the PR, as usual: for example, the shape of the probe-status field, how the map shows the three groups, and where the button sits.
 
+## Automatic Expert AI (owner-approved 2026-10-30)
+
+The owner chose fully automatic asking and return, removing the earlier click-only and autonomous-browser exclusions after the institutional-access risk and loss of prompt review were explained. `verify_queue` remains the tutor's trigger for management questions it should not answer from memory. The extension polls the paired local queue using Chrome alarms, survives service-worker sleep, and processes one screened prompt at a time in its own background tab without focusing the learner's window. Each question starts a fresh Standard-mode conversation; the dropdown is never changed. Only the queued prompt is sent.
+
+Automatic mode defaults on and has an off switch in extension settings. Sign-in, pop-ups, page failures and uncertain submissions pause it with a toolbar badge and a plain popup notice; it never signs in or resubmits an uncertain question. An untouched question stays queued. Finished answers return with sources through the existing hand-off and notice; manual asking, copy/paste return, Send and highlights stay available. Live checks belong to the owner; development uses generic fixtures only.
+
 ## Repo / workflow
 
 - Public GitHub fork of `amosblomqvist/learnharness` under the owner's account; work on branch `medical` (the fork's default branch); `main` mirrors upstream and is merged into `medical` periodically.
@@ -166,18 +172,16 @@ Wave A (parallel): `med-prompts`, `med-graph-tags`, `med-library`, `med-verify-a
 
 | Question type | Source | Run by |
 |---|---|---|
-| Management principles, clinical judgement, "approach to", first-line choice and why, nuanced comparisons | **UpToDate Expert AI** (main source for management) | learner click, via extension |
+| Management principles, clinical judgement, "approach to", first-line choice and why, nuanced comparisons | **UpToDate Expert AI** (main source for management) | extension, automatic by default; manual controls available |
 | Exact guideline text, thresholds, dosing tables, recent changes, Thai guidelines | Web search (Tavily free tier; the app's search backend) over open guidelines (NICE, ESC, AHA/ACC, IDSA, KDIGO, GOLD, GINA, WHO, Thai societies) | agent, automatic |
 | Primary evidence, trial results, references cited in Expert AI answers | PubMed / Europe PMC official APIs | agent, automatic |
 
 ### UpToDate Expert AI loop (Phase 2 — Chrome extension)
 
-The line: the app never queries UpToDate by itself. Every query starts with a learner click or keypress and runs one at a time in the learner's visible, logged-in tab (Mahidol access). Nothing runs in background or hidden tabs, and nothing is disguised as human usage.
-
 - **Queue built ahead:** at plan time the teacher writes the lesson's Expert AI questions up front: well-formed prompts with patient context, asking for the guideline basis. Questions that come up mid-session are appended.
 - **Non-blocking (owner decision):** teaching continues meanwhile. Management claims taught before their check are marked *provisional* and corrected automatically when the answer arrives.
-- **Ask, one click:** clicking a queue item (or pressing a shortcut) focuses Expert AI in the learner's tab, fills in the prompt and submits it.
-- **Return, one click:** a "Send to LearnHarness" button next to the answer sends its text and reference links to the app. "Send & ask next" chains to the next queued item, so the steady state is one keypress per question.
+- **Ask:** automatic mode asks queued questions one at a time in an extension-managed background tab. Manual queue clicks and the shortcut still focus Expert AI and submit a fresh question.
+- **Return:** automatic mode returns the finished answer and its sources without a click. "Send to LearnHarness", "Send & ask next" and manual paste-back remain available.
 - **After return (automatic):** the tutor compares the answer with what it taught, corrects anything that differs and cites "UpToDate Expert AI, [date]". PMIDs/DOIs in the answer are fetched from PubMed for cross-checking, and key points are offered for Anki.
 - **Any page:** highlight text, then "Send to LearnHarness", for guidelines, papers or PDFs open in the browser.
 - **Target:** Chrome (Manifest V3; also runs in Edge, Brave, Arc).
@@ -189,7 +193,6 @@ The line: the app never queries UpToDate by itself. Every query starts with a le
 - **Config:** Expert AI URL (default above); local app address.
 - **Maintenance risk:** UpToDate UI changes can break fill/send. Fallback: prompt on the clipboard, manual paste-back.
 - OpenEvidence: not integrated (no confirmed public API / eligibility outside US HCPs).
-- **Excluded by design:** any AI agent operating the browser to query UpToDate and read its answers. That includes ChatGPT's own agent/computer-use mode, other computer-use agents and autonomous extensions. It is the same automated access the licence forbids, whichever AI drives it. Every query starts with the learner's click.
 
 ## Models
 
@@ -221,5 +224,5 @@ Stay on the existing **pi engine with ChatGPT**. Possible future migration to th
 - Complete the first ChatGPT sign-in in the app.
 - Add a free Tavily key for web search.
 - Push the first reviewed cards to Anki with Anki desktop and AnkiConnect running.
-- Ask the first live Expert AI question and send the answer back; note whether "Send to LearnHarness" appears before the answer finishes streaming.
+- Check the first live automatic Expert AI run in a background or unfocused tab. The owner has confirmed that Send appears only after the answer finishes in the manual loop.
 - Import the first PDF or SlideScribe note into the library.

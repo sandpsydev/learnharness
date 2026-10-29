@@ -10,7 +10,7 @@ import { DEFAULT_CONFIG, isExpertUrl, validateConfig } from "../extension/config
 import { Attempts } from "../extension/attempts";
 import { ExtensionController } from "../extension/controller";
 import type { ControllerPorts, PageResult } from "../extension/controller";
-import { EXPERT_PAGE, answerContainer, canSubmit, questionBox, readAnswerWithSources, conversationIsFresh, fillQuestion, readAnswer, startConversation, submitQuestion } from "../extension/expert-page";
+import { ACCESS_HELP, EXPERT_PAGE, answerContainer, canSubmit, questionBox, readAnswerWithSources, conversationIsFresh, fillQuestion, readAnswer, startConversation, submitQuestion } from "../extension/expert-page";
 import type { Answer, QueueItem, SessionState } from "../extension/types";
 import { describePhase, referenceLines } from "../extension/ui";
 
@@ -32,6 +32,11 @@ function page() {
       editor.setAttribute("data-empty", String(!editor.textContent));
       editor.closest("form")!.querySelector("button[type=submit]")!.toggleAttribute("disabled", !editor.textContent);
     });
+  }
+  // linkedom does not lay out elements. Model non-empty browser client rects,
+  // including the zero-height rectangles returned for closed modal shells.
+  for (const element of document.querySelectorAll<HTMLElement>("*")) {
+    element.getClientRects = () => [{ width: 948, height: element.matches(".ec-modal") ? 0 : 20 }] as unknown as DOMRectList;
   }
   return { document, box };
 }
@@ -133,13 +138,46 @@ describe("extension page adapter (local fixture only)", () => {
     assert.throws(() => fillQuestion(document, "Generic question"), /Switch Expert AI to Standard, then retry/);
     assert.equal(box.textContent, "");
   });
-  it("gives popup-specific help while ignoring hidden modal shells", () => {
-    const { document } = page();
-    assert.ok(questionBox(document));
-    document.querySelector(".ec-welcome-modal")!.parentElement!.removeAttribute("hidden");
-    // Isolate the visible welcome popup from the signout shells.
-    document.querySelectorAll(EXPERT_PAGE.access).forEach((node) => node.setAttribute("hidden", ""));
-    assert.throws(() => questionBox(document), /Close the Expert AI pop-up, then retry/);
+  it("ignores empty zero-height modal shells with client rects instead of throwing ACCESS_HELP", () => {
+    const { document, box } = page();
+    Object.defineProperty(document, "defaultView", { configurable: true, value: {
+      getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+    } });
+    const shells = [...document.querySelectorAll<HTMLElement>(".ec-modal")];
+    assert.equal(shells.length, 5);
+    for (const shell of shells) {
+      assert.equal(shell.children.length, 0);
+      assert.ok(shell.hasAttribute("tabindex"));
+      assert.equal(shell.getClientRects().length, 1);
+      assert.equal(shell.getClientRects()[0]!.height, 0);
+    }
+    assert.equal(questionBox(document), box);
+    assert.doesNotThrow(() => startConversation(document));
+  });
+  it("keeps existing access and popup messages for visible dialog children in zero-height shells", () => {
+    const dialogFixture = readFileSync(new URL("./fixtures/extension/expert-ai-open-popup.html", import.meta.url), "utf8");
+    for (const selector of [...EXPERT_PAGE.access.split(", "), ...EXPERT_PAGE.popup.split(", ")]) {
+      const { document, box } = page();
+      const shell = document.querySelector<HTMLElement>(selector)!;
+      shell.innerHTML = dialogFixture;
+      const dialog = shell.firstElementChild as HTMLElement;
+      dialog.getClientRects = () => [{ width: 320, height: 160 }] as unknown as DOMRectList;
+      const message = selector.includes("signout") || selector.includes("unauthorized") ? ACCESS_HELP : "Close the Expert AI pop-up, then retry.";
+      assert.throws(() => questionBox(document), { message });
+      dialog.setAttribute("hidden", "");
+      assert.equal(questionBox(document), box, "hidden dialog children must not block");
+      dialog.removeAttribute("hidden");
+      shell.setAttribute("hidden", "");
+      assert.equal(questionBox(document), box, "a hidden shell hides its descendants");
+    }
+  });
+  it("blocks a non-zero-size shell itself and ignores zero-width shells", () => {
+    const { document, box } = page();
+    const shell = document.querySelector<HTMLElement>(".ec-signout-modal")!;
+    shell.getClientRects = () => [{ width: 320, height: 160 }] as unknown as DOMRectList;
+    assert.throws(() => questionBox(document), { message: ACCESS_HELP });
+    shell.getClientRects = () => [{ width: 0, height: 160 }] as unknown as DOMRectList;
+    assert.equal(questionBox(document), box);
   });
   it("requires an initial screen and an empty editor after starting a conversation", () => {
     const { document, box } = page();
@@ -153,7 +191,7 @@ describe("extension page adapter (local fixture only)", () => {
       const { document } = page(); let clicks = 0;
       document.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => clicks++));
       if (scenario === "sign-in") document.querySelectorAll(EXPERT_PAGE.question).forEach((node) => node.remove());
-      if (scenario.startsWith(".")) { const modal = document.createElement("div"); modal.className = scenario.slice(1); document.body.append(modal); }
+      if (scenario.startsWith(".")) { const modal = document.createElement("div"); modal.className = scenario.slice(1); modal.getClientRects = () => [{ width: 320, height: 160 }] as unknown as DOMRectList; document.body.append(modal); }
       if (scenario === "missing-submit") document.querySelector(EXPERT_PAGE.submit)!.remove();
       if (scenario === "missing-new") document.querySelectorAll(`${EXPERT_PAGE.newConversation}, ${EXPERT_PAGE.sidebarNewConversation}`).forEach((node) => node.remove());
       if (scenario === "hidden") Object.defineProperty(document, "visibilityState", { value: "hidden" });

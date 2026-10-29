@@ -8,6 +8,8 @@ Read `probe_done.assessment.strands`: **hold** means reliably understood, **shak
 
 When the library covers the topic, check the learner's lecture slides and books at planning time for what their faculty emphasises. You may add a To-build item the probe missed if it lies on the path to the goal. Books set accuracy and emphasis, not scope: a chapter outline never becomes the plan.
 
+**Depth matches scope:** for a broad topic, give a solid overview of the shared framework tying the conditions together and, for each condition, the must-know points, core pathophysiology and basic management — never a vague list. Offer conditions deserving more as deep dives the learner can send to Tonight's questions; a single-condition topic goes all the way down, and you judge which kind a topic is.
+
 Present every plan in this short shape (this replaces the freeform plan-presentation instructions):
 
 1. **Goal:** one bedside sentence on what you will be able to recognise, explain or decide.

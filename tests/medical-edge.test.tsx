@@ -100,7 +100,7 @@ describe("medical prompt amendment", () => {
 		const prompt = composeInstructions("teacher");
 		assert.ok(prompt.includes("Faster, deeper medical teaching — amendment"));
 		assert.ok(prompt.indexOf("# Faster, deeper") > prompt.indexOf("# The two questions"));
-		for (const text of ["05-method.md", "28-predictions.md", "30-question-principles.md", "**Goal:**", "**Already yours:**", "**To build:**", "**Optional deeper:**", "**Rough time**", "faculty emphasises", "never stacks extra steps", "Right and confident", "Wrong or unsure", "one hard applied question", "right, move on; if wrong, teach"]) assert.ok(prompt.includes(text), text);
+		for (const text of ["05-method.md", "28-predictions.md", "30-question-principles.md", "**Goal:**", "**Already yours:**", "**To build:**", "**Optional deeper:**", "**Rough time**", "faculty emphasises", "**Depth matches scope:**", "shared framework tying the conditions together", "must-know points, core pathophysiology and basic management", "never a vague list", "deep dives the learner can send to Tonight's questions", "a single-condition topic goes all the way down", "you judge which kind a topic is", "never stacks extra steps", "Right and confident", "Wrong or unsure", "one hard applied question", "right, move on; if wrong, teach"]) assert.ok(prompt.includes(text), text);
 		assert.equal(composeInstructions("prober").includes("# Faster, deeper"), false);
 		assert.equal(composeInstructions("practice").includes("# Faster, deeper"), false);
 	});

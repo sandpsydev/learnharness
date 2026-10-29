@@ -1,7 +1,8 @@
 // Instantiated only by the service worker. Content scripts never get the token.
 import type { Config, QueueItem, Answer, Highlight } from "./types";
 export class VerifyApi {
-  constructor(private config: Config, private fetchFn: typeof fetch = fetch) {}
+  // Call the browser global directly; storing it unbound gives it this instance as its receiver.
+  constructor(private config: Config, private fetchFn: typeof fetch = (input, init) => fetch(input, init)) {}
   private async call<T>(path: string, body?: unknown): Promise<T> {
     let response: Response;
     try {

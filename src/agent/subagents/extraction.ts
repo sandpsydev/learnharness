@@ -33,7 +33,8 @@ import type { GraphStore } from "../../core/ports.ts";
 import { emit } from "../../core/events.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { batchRuns, coverageOf, messageViewLines } from "../../core/coverage.ts";
-import { failedOutputCallIds, type LhMessage } from "../../core/native-messages.ts";
+import { failedOutputCallIds, isMissFlow, learnerTexts, type LhMessage } from "../../core/native-messages.ts";
+import { copiesSource, verbatimProblem, verbatimRuns } from "../../core/miss-flow.ts";
 import { auditorGraphTools } from "../tools/graph.ts";
 import { runSubmitAgent, healStringifiedArrays } from "./submit-agent.ts";
 import { runTagger, TAG_BATCH_SIZE } from "./tagger.ts";
@@ -482,6 +483,15 @@ type (the optional systems and factType fields); an idea the graph already holds
 so tag only the ideas you submit. The tool's field descriptions carry the details.`;
 
 export const EXTRACTOR_INSTRUCTIONS = `${SESSION_PREAMBLE}\n\n${EXTRACTION_CORE}\n\n${SESSION_MESSAGE_ID_RULE}`;
+
+/** Explain my miss (Phase 7): added to the extractor's instructions for a
+ *  miss session only. The learner brought a question-bank question; the
+ *  graph keeps the medical ideas behind the miss, never the bank's text. */
+export const MISS_EXTRACTOR_NOTE =
+	"This session is a learner working through a question-bank question they got wrong. Extract only the medical " +
+	"ideas the teaching established, written in your own words. Never copy the question bank: no part of the " +
+	"vignette stem, the answer options, or the bank's explanation may appear in a name or statement, and no " +
+	"proposition may describe the question itself (\"the vignette asks…\", \"option C is…\").";
 export const NOTES_EXTRACTOR_INSTRUCTIONS = `${NOTES_PREAMBLE}\n\n${EXTRACTION_CORE}`;
 
 // ── the same-source digest (owner, 2026-09-30 evening) ──
@@ -512,6 +522,19 @@ export function sourceDigest(graph: DerivedGraph, sourceId: string): string {
 	return lines.join("\n");
 }
 
+/** Explain my miss: refuse any proposition whose name or statement repeats a
+ *  run of the learner's question-bank text word for word. The refusal goes
+ *  back to the extractor, which rewrites it in the same run. */
+export function validateNoBankCopy(
+	value: { propositions: ReadonlyArray<{ name: string; statement: string }> },
+	bank: ReadonlySet<string>,
+): string | null {
+	const problems = value.propositions.flatMap((p, i) =>
+		copiesSource(`${p.name}\n${p.statement}`, bank) ? [verbatimProblem(`Proposition ${i + 1} ("${p.name}")`)] : [],
+	);
+	return problems.length > 0 ? problems.join(" ") : null;
+}
+
 /** The extractor over ONE session transcript (the chat front door).
  *  `batchIds` — the CURRENT batch's teacher-prose message ids — is the
  *  anchor boundary: every submitted proposition's messageId must name
@@ -524,6 +547,8 @@ function runExtractor(
 	batchIds: ReadonlySet<string>,
 	signal: AbortSignal | undefined,
 	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
+	/** Explain my miss: the question bank's wording the drafts must not copy. */
+	bank?: ReadonlySet<string>,
 ): Promise<SessionFindings> {
 	// Chains in (the wire), chains out (the store) — no translation seam
 	// since chains-primary. Validation runs at the submit seam (error-back)
@@ -538,8 +563,11 @@ function runExtractor(
 		toolDescription: "Submit the session findings.",
 		parameters: sessionFindingsSchema,
 		fill: fillFindings,
-		validate: (value) => validateSessionAnchors(value, batchIds) ?? validateFindingsChains(value, existingIds),
-		systemPrompt: EXTRACTOR_INSTRUCTIONS,
+		validate: (value) =>
+			validateSessionAnchors(value, batchIds) ??
+			validateFindingsChains(value, existingIds) ??
+			(bank ? validateNoBankCopy(value, bank) : null),
+		systemPrompt: bank ? `${EXTRACTOR_INSTRUCTIONS}\n\n${MISS_EXTRACTOR_NOTE}` : EXTRACTOR_INSTRUCTIONS,
 		prompt,
 		engine,
 		signal,
@@ -980,6 +1008,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		sourceId: string,
 		view: string,
 		batchIds: ReadonlySet<string>,
+		bank?: ReadonlySet<string>,
 	): Promise<SessionFindings> {
 		const signal = runningExtractions.get(jobKey)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during a sync gap ends the job here
@@ -1009,6 +1038,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				recordStep(jobKey, "extractor", callUsage(usage), model);
 				console.info(`[extraction] extractor step ${step}: ${finishReason}, tools: ${tools}`);
 			},
+			bank,
 		);
 		console.info(`[extraction ${jobKey}] extractor done in ${Math.round(performance.now() - t0)}ms`);
 		return findings;
@@ -1183,6 +1213,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			refuseIfStagesUnready();
 			const covered = coverageOf(record.messages, graphStore.readCoverage(), chatId);
 			const failedOutputCalls = failedOutputCallIds(record.messages);
+			// Explain my miss: the learner's pasted question must not be copied
+			// into graph nodes. Only a miss session carries a bank set.
+			const bank = isMissFlow(record.messages) ? verbatimRuns(learnerTexts(record.messages)) : undefined;
 			if (covered.uncovered.length === 0) {
 				console.info(`[extraction ${chatId}] nothing uncovered — no-op`);
 				return { nodes: 0, chains: 0 };
@@ -1230,7 +1263,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 							setPhase(jobKey, "queued", "chat", undefined, part);
 							const findings = await withExtractSlot(jobKey, async () => {
 								setPhase(jobKey, "extracting", "chat", undefined, part);
-								return extract(jobKey, chatId, view, batchIds);
+								return extract(jobKey, chatId, view, batchIds, bank);
 							});
 							// SERIALIZED AUDIT (owner, 2026-09-28): audit + merge are the
 							// graph-mutating critical section — one job at a time,

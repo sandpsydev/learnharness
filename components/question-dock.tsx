@@ -15,6 +15,7 @@ import {
 	CONFIDENCE_STOPS,
 	DEFAULT_CONFIDENCE_INDEX,
 	emptyDockSelection,
+	isLetteredChoice,
 	normalizeOptions,
 	resolveCorrect,
 	seededRandom,
@@ -290,7 +291,9 @@ function QuestionDockForm({
 		const options = normalizeOptions(
 			(quizInput?.options ?? askInput?.options ?? []) as { label: string; value?: string }[],
 		);
-		const ordered = kind === "quiz" && options.length > 0 ? shuffleOptions(options, seededRandom(toolCallId)) : options;
+		// A lettered A–E single-best-answer keeps its order (isLetteredChoice).
+		const lettered = kind === "quiz" && isLetteredChoice(options, multi);
+		const ordered = kind === "quiz" && options.length > 0 && !lettered ? shuffleOptions(options, seededRandom(toolCallId)) : options;
 		const q: QuestionData = {
 			id: toolCallId,
 			kind,
@@ -301,6 +304,7 @@ function QuestionDockForm({
 			context: input.details,
 			mode,
 			options: ordered,
+			...(lettered ? { lettered } : {}),
 			createdAt: new Date().toISOString(),
 		};
 		if (quizInput) {
@@ -608,13 +612,17 @@ function QuestionDockForm({
 									)}
 								>
 									<span
+										data-letter={qd.lettered ? opt.value : undefined}
 										className={cn(
-											"mt-0.5 flex size-4 shrink-0 items-center justify-center border",
-											qd.mode === "multi-select" ? "rounded-sm" : "rounded-full",
+											"mt-0.5 flex shrink-0 items-center justify-center border",
+											// Lettered A–E rows wear the practice MCQ's letter badge.
+											qd.lettered ? "size-5 rounded-full font-mono text-xs" : "size-4",
+											!qd.lettered && (qd.mode === "multi-select" ? "rounded-sm" : "rounded-full"),
 											isSel ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40",
 										)}
 									>
-										{isSel && (
+										{qd.lettered && opt.value}
+										{!qd.lettered && isSel && (
 											<span className={cn(qd.mode === "multi-select" ? "text-base leading-none" : "size-1.5 rounded-full bg-current")}>
 												{qd.mode === "multi-select" ? "✓" : ""}
 											</span>

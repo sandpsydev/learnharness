@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { ArrowRightIcon, CornerDownLeftIcon, SquareIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Hint } from "@/components/ui/hint";
@@ -76,6 +77,8 @@ export function Composer({
 	 *  empty-Enter share it. */
 	onNext?: () => void;
 }) {
+	// A pasted screenshot that could not be attached: say why, above the input.
+	const [attachNotice, setAttachNotice] = useState("");
 	const act = () => {
 		const action = enterAction({ busy, canSend, nextProblem });
 		if (action === "stop") onStop();
@@ -85,17 +88,24 @@ export function Composer({
 	return (
 		<form
 			data-testid="composer"
-			className="flex items-end gap-1.5 p-1.5"
+			className="flex flex-wrap items-end gap-1.5 p-1.5"
 			onSubmit={(e) => {
 				e.preventDefault();
 				act();
 			}}
 		>
+			{attachNotice && (
+				<p role="status" data-testid="attach-notice" className="order-first basis-full px-2.5 text-xs text-destructive">
+					{attachNotice}
+				</p>
+			)}
 			<PathInput
 				ref={inputRef}
 				value={value}
-				onValueChange={onChange}
+				onValueChange={(v) => { if (attachNotice) setAttachNotice(""); onChange(v); }}
 				defaultDropTarget
+				pasteImages
+				onAttachError={setAttachNotice}
 				onKeyDown={(e) => {
 					// Esc ends dictation before anything else Esc might someday mean
 					// here (the dictate decisions: click-again or Esc to stop).

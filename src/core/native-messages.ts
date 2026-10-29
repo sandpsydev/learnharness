@@ -46,6 +46,7 @@ import {
 } from "./contracts/chat.ts";
 import { compactAnswerForModel, type QuestionAnswerData } from "./question-core.ts";
 import { activeCompactionOf, keptIndexFor } from "./compaction.ts";
+import { MISS_FLOW_MARKER_TEXT } from "./miss-flow.ts";
 
 /** The hard-invariant wording for an aborted turn's unanswered calls —
  *  carried over verbatim from the pre-native era so the model's view
@@ -69,6 +70,7 @@ export interface LhMarkerMessage {
 	role: "custom";
 	customType:
 		| "graph-context"
+		| "miss-flow"
 		| "probe-handoff"
 		| "subagent-steer"
 		| "subagent-abort"
@@ -311,6 +313,40 @@ export function newGraphContextMessage(picks: readonly GraphContextPick[], chain
 		details: { propositions: picks, chains },
 		timestamp: Date.now(),
 	};
+}
+
+/** The Explain-my-miss marker (medical fork, Phase 7): message[0] of a
+ *  miss session, written at creation like the graph-context marker. The
+ *  model reads the signal text; the transcript shows nothing (UI-less —
+ *  the learner's own first message is the visible start). */
+export function newMissFlowMessage(): LhMarkerMessage {
+	return {
+		id: newMessageId(),
+		role: "custom",
+		customType: "miss-flow",
+		content: MISS_FLOW_MARKER_TEXT,
+		display: false,
+		details: {},
+		timestamp: Date.now(),
+	};
+}
+
+/** Is this an Explain-my-miss session? The marker IS the identity — no
+ *  record field to drift out of step with the transcript. */
+export function isMissFlow(messages: readonly LhMessage[]): boolean {
+	return messages.some((m) => m.role === "custom" && m.customType === "miss-flow");
+}
+
+/** Everything the learner typed or pasted into a session (their user
+ *  messages) — in a miss session this is where the question bank's wording
+ *  lives, so the extractor and the card maker check their drafts against it. */
+export function learnerTexts(messages: readonly LhMessage[]): string[] {
+	const out: string[] = [];
+	for (const message of messages) {
+		if (message.role !== "user") continue;
+		out.push(...userFacingTextOf(message.content));
+	}
+	return out;
 }
 
 /** The learner's thinking submission (ONE send lane, owner round
@@ -826,7 +862,7 @@ export function nativeInputCause(message: AgentMessage, history: readonly AgentM
 	if (message.role === "custom") {
 		if (["probe-handoff", "subagent-steer", "subagent-abort"].includes(message.customType)) return "automatic";
 		if (["practice-thinking", "practice-next"].includes(message.customType)) return "learner";
-		return ["graph-context", "plan-block", "problem-dismissed", "compaction"].includes(message.customType) ? "neutral" : "unrecognizable";
+		return ["graph-context", "miss-flow", "plan-block", "problem-dismissed", "compaction"].includes(message.customType) ? "neutral" : "unrecognizable";
 	}
 	if (message.role === "toolResult") {
 		if (!(QUESTION_TOOLS as readonly string[]).includes(message.toolName) || message.isError || message.details == null || (message.details as { dismissed?: boolean }).dismissed) return "neutral";

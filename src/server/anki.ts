@@ -44,6 +44,8 @@ import {
 import { getGraph } from "../core/graph.ts";
 import type { ChatStore, GraphStore } from "../core/ports.ts";
 import { sessionMarkdown } from "../core/session-markdown.ts";
+import { isMissFlow, learnerTexts } from "../core/native-messages.ts";
+import { verbatimRuns } from "../core/miss-flow.ts";
 import { citationFor, marksNotice, VISION_NOTICE } from "../core/library.ts";
 import { libraryTools } from "../agent/tools/library.ts";
 import type { LibraryReader } from "../agent/library/searcher.ts";
@@ -67,6 +69,8 @@ export interface AnkiMaterial {
 	fallbackSystem?: OrganSystem;
 	/** Extra agent tools for this origin: where the library's search/read tools plug in. */
 	extraTools?: Record<string, AgentTool<any>>;
+	/** Explain my miss: runs of the question bank's text the cards must not repeat. */
+	bank?: ReadonlySet<string>;
 }
 
 export interface AnkiServiceDeps {
@@ -203,8 +207,19 @@ export function createAnkiService(deps: AnkiServiceDeps) {
 		if (origin.kind === "session") {
 			const record = deps.chatStore.getChat(origin.chatId);
 			if (!record) return fail(404, "not_found", "No such session.");
-			const text = sessionMarkdown(record.messages, { title: record.title, anchors: false });
-			return { title: record.title, text, sessionIds: [origin.chatId] };
+			// Explain my miss: the learner's opening message holds the pasted
+			// question bank item. It is left out of the card maker's material
+			// and its wording is fenced (cards that repeat it are sent back).
+			const miss = isMissFlow(record.messages);
+			const firstLearner = miss ? record.messages.findIndex((m) => m.role === "user") : -1;
+			const messages = firstLearner < 0 ? record.messages : record.messages.filter((_, i) => i !== firstLearner);
+			const text = sessionMarkdown(messages, { title: record.title, anchors: false });
+			return {
+				title: record.title,
+				text,
+				sessionIds: [origin.chatId],
+				...(miss ? { bank: verbatimRuns(learnerTexts(record.messages)) } : {}),
+			};
 		}
 		if (origin.kind === "nodes") return nodesMaterial(deps.graphStore, origin.nodeIds);
 		if (!deps.resolveLibrary) return fail(501, "library_unavailable", "Making cards from a library section isn't available here.");
@@ -295,6 +310,7 @@ export function createAnkiService(deps: AnkiServiceDeps) {
 						material: chunk,
 						hints: { fallbackSystem: material.fallbackSystem },
 						extraTools: material.extraTools,
+						bank: material.bank,
 						signal,
 						onStep: (u: Usage, model: string) => {
 							usage = accumulateJobUsage(usage, model, piUsageToStep(u));

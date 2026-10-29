@@ -5,8 +5,10 @@ import { FileSymlinkIcon, XIcon } from "lucide-react";
 import { quoteFilePath } from "@/src/core";
 import { appendToPrimaryInput } from "@/components/dictation";
 import { INSERT_FILE_PATHS_EVENT } from "@/components/path-input";
+import { imageFilesOf, saveImageFiles } from "@/components/image-attach";
 
 const BROWSER_NOTICE = "Local file paths can only be attached in the desktop app. You can paste a full path instead.";
+const BROWSER_IMAGE_HINT = "Local file paths can only be attached in the desktop app, but dropped images are saved and attached.";
 
 /** The content area only: the sidebar is deliberately outside this zone.
  * Existing files stay where they are; only quoted path strings enter drafts. */
@@ -59,8 +61,37 @@ export function FilePathDropZone({ children, className }: { children: React.Reac
 				event.preventDefault();
 				event.stopPropagation();
 				clearDrag();
+				// React clears event.currentTarget once the handler returns, so keep
+				// the zone: the browser image path attaches after an upload.
+				const zone = event.currentTarget;
+				// Where one attachment goes: the focused editor's caret, else the
+				// primary input (the same destination as dictation).
+				const attach = (paths: string[], skipped: number) => {
+					const focused = document.activeElement?.closest<HTMLElement>("[data-file-path-input]");
+					if (focused && zone.contains(focused)) {
+						focused.dispatchEvent(new CustomEvent(INSERT_FILE_PATHS_EVENT, { detail: paths }));
+					} else if (!appendToPrimaryInput(paths.map(quoteFilePath).join(" "))) {
+						setNotice("Open a chat to attach file paths.");
+						return;
+					}
+					setNotice(skipped ? "Some dropped items had no available file path." : "");
+				};
 				const resolve = window.lh?.getPathForFile;
-				if (!resolve) { setNotice(BROWSER_NOTICE); return; }
+				if (!resolve) {
+					// No desktop file paths here (a plain browser): a dropped IMAGE
+					// is saved into the data dir and attached; anything else keeps
+					// the old notice.
+					const images = imageFilesOf(event.dataTransfer.files);
+					if (images.length === 0) { setNotice(BROWSER_NOTICE); return; }
+					const others = event.dataTransfer.files.length - images.length;
+					void saveImageFiles(images).then(({ paths, error }) => {
+						if (paths.length === 0) { setNotice(error ?? BROWSER_NOTICE); return; }
+						attach(paths, 0);
+						if (error) setNotice(error);
+						else if (others > 0) setNotice(BROWSER_IMAGE_HINT);
+					});
+					return;
+				}
 				// Directories are not file references. This check uses drag metadata,
 				// never a server request or a new filesystem capability.
 				const entries = Array.from(event.dataTransfer.items).filter((item) => item.kind === "file");
@@ -78,14 +109,7 @@ export function FilePathDropZone({ children, className }: { children: React.Reac
 					setNotice("No local file paths were available. Drop existing files from your computer.");
 					return;
 				}
-				const focused = document.activeElement?.closest<HTMLElement>("[data-file-path-input]");
-				if (focused && event.currentTarget.contains(focused)) {
-					focused.dispatchEvent(new CustomEvent(INSERT_FILE_PATHS_EVENT, { detail: paths }));
-				} else if (!appendToPrimaryInput(paths.map(quoteFilePath).join(" "))) {
-					setNotice("Open a chat to attach file paths.");
-					return;
-				}
-				setNotice(skipped ? "Some dropped items had no available file path." : "");
+				attach(paths, skipped);
 			}}
 		>
 			{children}

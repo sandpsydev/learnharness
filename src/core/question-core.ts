@@ -421,6 +421,8 @@ export interface QuestionData {
 	context?: string;
 	mode: QuestionMode;
 	options: QuizOption[]; // display order (post-shuffle)
+	/** quiz only: a lettered A–E single-best-answer (see isLetteredChoice). */
+	lettered?: boolean;
 	// quiz only. NEVER send to the client before answering:
 	correctIndices?: number[];
 	// explain only. NEVER send to the client before answering:
@@ -583,6 +585,15 @@ export function normalizeOptions(
 /** Fisher-Yates over a copy. correctAnswer is keyed by value, so display
  *  order can be shuffled safely before resolving indices. */
 // ─── options ────────────────────────────────────────────────────────────────
+
+/** A lettered single-best-answer question (Explain my miss twin, Phase 3 style):
+ *  exactly five single-select options whose values are A–E in order. The
+ *  dock shows them as lettered rows in that order — never shuffled, so
+ *  "A" stays the first row and the explanation can speak in letters. */
+export const LETTERED_VALUES = ["A", "B", "C", "D", "E"] as const;
+export function isLetteredChoice(options: readonly QuizOption[], multiSelect: boolean): boolean {
+	return !multiSelect && options.length === LETTERED_VALUES.length && options.every((o, i) => o.value === LETTERED_VALUES[i]);
+}
 
 /** mulberry32 seeded by a string — deterministic shuffle for hydration-safe rendering. */
 export function seededRandom(seed: string): () => number {

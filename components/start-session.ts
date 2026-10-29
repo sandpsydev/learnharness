@@ -3,6 +3,12 @@ import { clearOpeningPrompt, OPENING_PROMPT_FAILURE, stashOpeningPrompt } from "
 interface SessionCreation {
 	title: string;
 	kind?: "practice";
+	/** Explain my miss: the server fixes the title and writes the miss
+	 *  marker. The learner's pasted question is NEVER a title — it travels
+	 *  only as `openingText`, the first message. */
+	flow?: "miss";
+	/** The first message when it must differ from the title (miss flow). */
+	openingText?: string;
 	graphContext?: { propositions: readonly { id: string; name: string; statement: string }[] };
 }
 
@@ -21,14 +27,14 @@ export class SessionStarter {
 			const res = await fetchLike("/api/chats", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(body),
+				body: JSON.stringify({ ...body, openingText: undefined }),
 			});
 			if (!res.ok) throw new Error(OPENING_PROMPT_FAILURE);
 			const result = await res.json() as { id?: unknown };
 			if (typeof result.id !== "string" || !/^[A-Za-z0-9_-]+$/.test(result.id)) throw new Error(OPENING_PROMPT_FAILURE);
 			this.created = { identity, id: result.id };
 		}
-		if (!stashOpeningPrompt(this.created.id, body.title)) throw new Error(OPENING_PROMPT_FAILURE);
+		if (!stashOpeningPrompt(this.created.id, body.openingText ?? body.title)) throw new Error(OPENING_PROMPT_FAILURE);
 		return `/chat/${this.created.id}`;
 	}
 }

@@ -1,5 +1,5 @@
 import { chainsForSelection, formatChainLine } from "@/src/core";
-import { newGraphContextMessage, type GraphContextPick } from "@/src/core";
+import { missSessionTitle, newGraphContextMessage, newMissFlowMessage, type GraphContextPick } from "@/src/core";
 import { compactionInFlight, createChat, isTurnRunning, listChats, readSettingsRecord, stores, titleFromPrompt } from "@/src/server";
 import type { ChatListItem } from "@/src/core";
 
@@ -20,12 +20,18 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; graphContext?: unknown };
-	const title = typeof body.title === "string" ? body.title : "";
+	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; flow?: unknown; graphContext?: unknown };
+	// EXPLAIN MY MISS (medical fork, Phase 7): flow "miss" starts an ordinary
+	// teaching session (kind stays teach, so extraction runs as normal) with
+	// a miss marker as message[0]. The title is FIXED here, whatever the
+	// client sent: the learner's pasted question must never become the
+	// session title (question-bank wording stays out of the sidebar).
+	const miss = body.flow === "miss";
+	const title = miss ? missSessionTitle() : typeof body.title === "string" ? body.title : "";
 	// Practice sessions (owner, 2026-10-04): kind "practice" marks the
 	// record — the practice agent + its tools from turn 1, no extraction.
 	const kind = body.kind === "practice" ? ("practice" as const) : undefined;
-	const chat = createChat(titleFromPrompt(title || "Untitled session"), kind);
+	const chat = createChat(miss ? title : titleFromPrompt(title || "Untitled session"), miss ? undefined : kind);
 	// PER-SESSION MODELS (owner, 2026-09-28): a session owns its model +
 	// thinking level from birth — stamped verbatim from the STRONG slot,
 	// the new-session default. From here the strong slot never reaches
@@ -58,7 +64,7 @@ export async function POST(req: Request) {
 							typeof (p as GraphContextPick).statement === "string",
 					)
 			: [];
-	if (picks.length > 0) {
+	if (picks.length > 0 && !miss) {
 		const byId = new Map(stores.graphStore.readNodes().map((n) => [n.id, n]));
 		// Resolve tags from the current stored graph: older callers also get
 		// medical context, and request payloads cannot invent tag values.
@@ -76,5 +82,6 @@ export async function POST(req: Request) {
 		);
 		stores.chatStore.saveMessages(chat.id, [newGraphContextMessage(taggedPicks, chainLines)]);
 	}
+	if (miss) stores.chatStore.saveMessages(chat.id, [newMissFlowMessage()]);
 	return Response.json({ id: chat.id, title: chat.title });
 }

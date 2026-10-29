@@ -415,6 +415,10 @@ export interface TeacherToolContext extends PlanToolContext {
 	 *  verify_queue + evidence_sources. Absent (tests, bare contexts) = the
 	 *  pair is not registered. The chatId rides the teacher's own ctx. */
 	verify?: Omit<VerifyToolContext, "chatId">;
+	/** Explain my miss (Phase 7): the twin question is a lettered
+	 *  single-best-answer, so a miss session always holds the multiple-
+	 *  choice `quiz`, even when the learner's setting arms free recall. */
+	missFlow?: boolean;
 }
 
 /**
@@ -453,7 +457,7 @@ export function createTeacherTools(
 	// Quizzing mechanics (owner 2026-09-27): free-recall swaps the teach
 	// quiz for the teach explain — one quizzing tool at a time, whichever
 	// the settings arm. ask stays always-on.
-	const mechanics = quizMechanics(enabled);
+	const mechanics = ctx.missFlow ? "choice" : quizMechanics(enabled);
 	// Same widening as the prober's (see above) — the conditional spread of
 	// two differently-typed literals collapses into an unusable union type.
 	const quizzing: Record<string, AgentTool<any>> =

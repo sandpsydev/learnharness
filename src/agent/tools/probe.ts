@@ -70,7 +70,7 @@ export function probeDoneTool(ctx: ProbeDoneContext): Record<string, AgentTool<a
 					return {
 						ok: false,
 						error:
-							"A question is still open — resolve it (or let him answer) before concluding the probe. " +
+							"A question is still open — resolve it (or let the learner answer) before concluding the probe. " +
 							"probe_done only fires with no question outstanding.",
 					};
 				}

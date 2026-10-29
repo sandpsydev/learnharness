@@ -9,7 +9,7 @@ import { VerifyApi } from "../extension/api";
 import { DEFAULT_CONFIG, isExpertUrl, validateConfig } from "../extension/config";
 import { ExtensionController } from "../extension/controller";
 import type { ControllerPorts, PageResult } from "../extension/controller";
-import { answerContainer, conversationIsFresh, fillQuestion, readAnswer, startConversation, submitQuestion } from "../extension/expert-page";
+import { EXPERT_PAGE, answerContainer, canSubmit, questionBox, conversationIsFresh, fillQuestion, readAnswer, startConversation, submitQuestion } from "../extension/expert-page";
 import type { Answer, QueueItem, SessionState } from "../extension/types";
 import { referenceLines } from "../extension/ui";
 
@@ -17,11 +17,21 @@ const fixture = readFileSync(new URL("./fixtures/extension/expert-ai.html", impo
 function page() {
   const { document, Event: FixtureEvent } = parseHTML(fixture);
   // linkedom has no rendering/window focus; supply only those browser signals.
-  Object.defineProperty(document, "defaultView", { value: { Event: FixtureEvent } });
+  Object.defineProperty(document, "defaultView", { configurable: true, value: { Event: FixtureEvent } });
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
   document.hasFocus = () => true;
-  const box = document.querySelector("textarea")!;
-  box.value = "";
+  class FixtureInputEvent extends FixtureEvent {
+    inputType: string; data: string | null;
+    constructor(type: string, init: InputEventInit) { super(type, init); this.inputType = init.inputType ?? ""; this.data = init.data ?? null; }
+  }
+  Object.defineProperty(document, "defaultView", { configurable: true, value: { Event: FixtureEvent, InputEvent: FixtureInputEvent } });
+  const box = document.querySelector<HTMLElement>(EXPERT_PAGE.question)!;
+  for (const editor of document.querySelectorAll<HTMLElement>(EXPERT_PAGE.question)) {
+    editor.addEventListener("input", () => {
+      editor.setAttribute("data-empty", String(!editor.textContent));
+      editor.closest("form")!.querySelector("button[type=submit]")!.toggleAttribute("disabled", !editor.textContent);
+    });
+  }
   return { document, box };
 }
 const items: QueueItem[] = ["a", "b"].map((id) => ({ id, chatId: "chat_1", chatTitle: "Fixture lesson", prompt: `Generic question ${id}: explain the guideline basis.`, status: "queued", createdAt: "2026-10-29T00:00:00.000Z" }));
@@ -63,46 +73,102 @@ function harness(options: { pageResult?: PageResult; fail?: string; delaySubmit?
   return { controller: new ExtensionController(ports), ports, api, calls, submissions, copies, state: () => state };
 }
 
+const answerFixture = readFileSync(new URL("./fixtures/extension/expert-ai-answer.html", import.meta.url), "utf8");
 describe("extension page adapter (local fixture only)", () => {
-  it("starts a fresh conversation, fills exactly the prompt, then submits without touching Standard mode", () => {
+  it("starts fresh, registers rich-text input, waits for enabled send, and leaves Standard untouched", () => {
     const { document, box } = page();
-    box.value = "old conversation";
+    box.textContent = "Old question"; box.setAttribute("data-empty", "false");
     const order: string[] = [];
-    document.querySelector('[aria-label="New conversation"]')!.addEventListener("click", () => { order.push("new"); box.value = ""; });
-    box.addEventListener("input", () => order.push("input"));
-    document.querySelector('[data-lh-expert-submit]')!.addEventListener("click", () => { order.push("submit"); assert.equal(box.value, items[0]!.prompt); });
-    document.querySelector("select")!.addEventListener("change", () => assert.fail("mode must stay untouched"));
+    document.querySelector(EXPERT_PAGE.newConversation)!.addEventListener("click", () => {
+      order.push("new"); box.textContent = ""; box.setAttribute("data-empty", "true");
+    });
+    box.addEventListener("input", (event) => {
+      assert.equal((event as InputEvent).inputType, "insertText");
+      assert.equal((event as InputEvent).data, items[0]!.prompt);
+      order.push("input");
+    });
+    box.closest("form")!.querySelector(EXPERT_PAGE.submit)!.addEventListener("click", () => {
+      order.push("submit"); assert.equal(box.textContent, items[0]!.prompt);
+    });
+    document.querySelectorAll('[data-e2e="output-mode-menu-trigger"]').forEach((button) => button.addEventListener("click", () => assert.fail("mode must stay untouched")));
+    assert.equal(canSubmit(document), false);
+    assert.throws(() => submitQuestion(document), /unavailable/);
     startConversation(document);
     assert.equal(conversationIsFresh(document), true);
     fillQuestion(document, items[0]!.prompt);
+    assert.equal(canSubmit(document), true);
     submitQuestion(document);
     assert.deepEqual(order, ["new", "input", "submit"]);
-    assert.equal(document.querySelector("select")!.textContent?.includes("Standard"), true);
   });
-  it("stops on sign-in/access screens, missing placeholders, and invisible tabs before a click", () => {
-    for (const scenario of ["sign-in", "access", "missing-submit", "missing-new", "hidden", "unfocused"]) {
-      const { document, box } = page();
-      let clicks = 0;
+  it("selects the visible desktop or mobile editor and its own send button", () => {
+    const { document, box } = page();
+    box.closest('[data-e2e="desktop-initial-screen-input-wrapper"]')!.setAttribute("hidden", "");
+    const mobile = document.querySelector('[data-e2e="desktop-initial-screen-mobile-input"]')!;
+    mobile.removeAttribute("hidden");
+    const editor = mobile.querySelector<HTMLElement>(EXPERT_PAGE.question)!;
+    assert.equal(questionBox(document), editor);
+    let sent = false;
+    mobile.querySelector(EXPERT_PAGE.submit)!.addEventListener("click", () => { sent = true; });
+    fillQuestion(document, "Generic mobile question"); submitQuestion(document);
+    assert.equal(sent, true); assert.equal(box.textContent, "");
+  });
+  it("uses native insertText when supported", () => {
+    const { document, box } = page();
+    const selection = { removeAllRanges() {}, addRange() {} };
+    document.getSelection = () => selection as unknown as Selection;
+    document.createRange = () => ({ selectNodeContents(node: Node) { assert.equal(node, box); } }) as Range;
+    document.execCommand = (command, _ui, text) => {
+      assert.equal(command, "insertText"); box.textContent = text!; return true;
+    };
+    fillQuestion(document, "Generic native edit");
+    assert.equal(box.textContent, "Generic native edit");
+  });
+  it("requires an initial screen and an empty editor after starting a conversation", () => {
+    const { document, box } = page();
+    box.closest(EXPERT_PAGE.initialScreen)!.removeAttribute("data-e2e");
+    box.setAttribute("aria-label", "Continue conversation...");
+    assert.equal(conversationIsFresh(document), false);
+    assert.throws(() => fillQuestion(document, "question"), /empty new conversation/);
+  });
+  it("stops for visible access modals, missing controls, and invisible tabs before a click", () => {
+    for (const scenario of ["sign-in", "missing-submit", "missing-new", "hidden", "unfocused", ...EXPERT_PAGE.access.split(", ")]) {
+      const { document } = page(); let clicks = 0;
       document.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => clicks++));
-      if (scenario === "sign-in") box.remove();
-      if (scenario === "access") { const access = document.createElement("p"); access.setAttribute("data-lh-expert-access-required", ""); document.body.append(access); }
-      if (scenario === "missing-submit") document.querySelector("[data-lh-expert-submit]")!.remove();
-      if (scenario === "missing-new") document.querySelector('[aria-label="New conversation"]')!.remove();
+      if (scenario === "sign-in") document.querySelectorAll(EXPERT_PAGE.question).forEach((node) => node.remove());
+      if (scenario.startsWith(".")) { const modal = document.createElement("div"); modal.className = scenario.slice(1); document.body.append(modal); }
+      if (scenario === "missing-submit") document.querySelector(EXPERT_PAGE.submit)!.remove();
+      if (scenario === "missing-new") document.querySelectorAll(`${EXPERT_PAGE.newConversation}, ${EXPERT_PAGE.sidebarNewConversation}`).forEach((node) => node.remove());
       if (scenario === "hidden") Object.defineProperty(document, "visibilityState", { value: "hidden" });
       if (scenario === "unfocused") document.hasFocus = () => false;
-      assert.throws(() => startConversation(document), /Sign in|not verified|visible/);
+      assert.throws(() => startConversation(document), /Sign in|unavailable|visible/);
       assert.equal(clicks, 0, scenario);
     }
   });
-  it("extracts only a completed answer's text and safe reference links, without fetching them", () => {
-    const { document } = page();
-    document.querySelector("#answers")!.innerHTML = `<div data-lh-expert-answer>Still streaming…</div>`;
-    assert.equal(answerContainer(document), null);
-    document.querySelector("#answers")!.innerHTML += `<div data-lh-expert-answer data-lh-answer-complete="true">Fixture answer <a data-lh-expert-reference href="https://example.org/g">Guideline</a><a data-lh-expert-reference href="javascript:alert(1)">bad</a><a data-lh-expert-reference href="https://example.org/g">duplicate</a></div><a href="https://example.org/sidebar">Outside</a>`;
-    const result = readAnswer(answerContainer(document)!, "https://example.org/local-fixture");
-    assert.match(result.text, /Fixture answer/);
-    assert.doesNotMatch(result.text, /Still streaming|Outside/);
-    assert.deepEqual(result.references, [{ title: "Guideline", url: "https://example.org/g" }]);
+  it("falls back to a visible sidebar new-conversation control", () => {
+    const { document } = page(); let clicked = false;
+    document.querySelector(EXPERT_PAGE.newConversation)!.setAttribute("hidden", "");
+    document.querySelector(EXPERT_PAGE.sidebarNewConversation)!.addEventListener("click", () => { clicked = true; });
+    startConversation(document); assert.equal(clicked, true);
+  });
+  it("uses only the last answer and waits for its copy action bar", () => {
+    const { document } = page(); const answers = document.querySelector("#answers")!;
+    answers.innerHTML = answerFixture;
+    assert.ok(answerContainer(document));
+    answers.innerHTML += answerFixture;
+    const last = answers.lastElementChild!;
+    last.querySelector(EXPERT_PAGE.complete)!.remove();
+    assert.equal(answerContainer(document), null, "older completed answer must not be returned");
+  });
+  it("keeps drug names and citation IDs, drops nudges and chrome, and leaves references pending inspection", () => {
+    const { document } = page(); document.querySelector("#answers")!.innerHTML = answerFixture;
+    const container = answerContainer(document)!;
+    const result = readAnswer(container, "https://example.org/local-fixture");
+    assert.match(result.text, /Example medicine/);
+    assert.match(result.text, /\[sources: 101\]/);
+    assert.match(result.text, /\[sources: 102,103\]/);
+    assert.doesNotMatch(result.text, /Thinking|disclaimer|Suggested follow-up|Copy|Sources/);
+    assert.deepEqual(result.references, []);
+    assert.ok(container.querySelector('[data-e2e="nudge"]'), "reading must not mutate the page");
   });
 });
 

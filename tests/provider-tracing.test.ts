@@ -45,6 +45,9 @@ describe("standalone JavaScript tracing exclusions and native workaround policy"
 			"node_modules/pdfjs-dist/legacy/**/*",
 			"node_modules/pdfjs-dist/standard_fonts/**/*",
 			"node_modules/@napi-rs/canvas-*/**/*",
+			"src/agent/image-processing/*.mjs",
+			"src/agent/image-processing/LICENSE",
+			"node_modules/@silvia-odwyer/photon-node/**/*",
 			"node_modules/@resvg/resvg-js-*/**/*",
 			// Library (medical fork): the local embedding model's native runtime,
 			// current platform only (builds run per-OS).

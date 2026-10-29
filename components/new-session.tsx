@@ -8,6 +8,7 @@ import { Composer } from "@/components/composer";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { useFieldCycle } from "@/components/field-cycle";
 import { SidebarToggle } from "@/components/sidebar";
+import { PHONE_QUERY, PhoneBack, PhoneSetupNote } from "@/components/phone";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useModelSetup, selectedModelUnavailable, openModelPicker, ZeroKeysPill } from "@/components/setup-cta";
 import { StatsBar } from "@/components/stats-bar";
@@ -197,8 +198,11 @@ export function DraftShell({
 						<div className="bg-background pb-4">
 							<div className={DOCK}>
 								<ComposerActions
+									// The node picker is the graph's chain table: Mac only (Pocket mode).
 									picker={(picks.length > 0 || mode === "practice") && (
-										<NodePickerControl count={picks.length} onOpen={onOpenPicker} onClear={onClearPicks} />
+										<span className="contents max-sm:hidden">
+											<NodePickerControl count={picks.length} onOpen={onOpenPicker} onClear={onClearPicks} />
+										</span>
 									)}
 									action={
 										mode === "miss" ? <ExplainMissActive onLeave={onLeaveMiss} />
@@ -230,10 +234,13 @@ export function DraftShell({
 										}
 									/>
 								</div>
-								<StatsBar
-									dictationSlot={<DictationBar dictation={dictation} />}
-									turns={[]}
-								/>
+								{/* Pocket mode: dropped on a phone (see chat.tsx). */}
+								<div className="contents max-sm:hidden">
+									<StatsBar
+										dictationSlot={<DictationBar dictation={dictation} />}
+										turns={[]}
+									/>
+								</div>
 							</div>
 						</div>
 					</div>
@@ -246,6 +253,7 @@ export function DraftShell({
 			<header className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 px-3 py-2">
 				<div className="pointer-events-auto">
 					<SidebarToggle />
+					<PhoneBack />
 				</div>
 			</header>
 		</div>
@@ -306,8 +314,11 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 	const send = useCallback(() => {
 		const draft = textRef.current.trim();
 		if (!draft || startingRef.current) return;
+		// Pocket mode: model setup is a Mac job. On a phone the note beside the
+		// composer says so, and the draft waits instead of opening the dialog.
+		const onPhone = window.matchMedia(PHONE_QUERY).matches;
 		if (!configured) {
-			setSetupOpen(true);
+			if (!onPhone) setSetupOpen(true);
 			return;
 		}
 		// The pre-send KEY guards (owner interlude, no-orphan-chats): guard
@@ -317,12 +328,12 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 		// selection with another provider opens the ordinary Strong picker.
 		// The server's admission gate remains the belt.
 		if (zeroKeys) {
-			setSetupOpen(true);
+			if (!onPhone) setSetupOpen(true);
 			return;
 		}
 		const strong = catalog?.slots.strong?.model;
 		if (selectedModelUnavailable(catalog, strong ? `${strong.provider}:${strong.id}` : undefined)) {
-			openModelPicker();
+			if (!onPhone) openModelPicker();
 			return; // The learner replaces it explicitly, then sends again.
 		}
 		startingRef.current = true;
@@ -381,20 +392,25 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 					/>
 				}
 				setupCta={
-					zeroKeys ? (
-						<ZeroKeysPill inline onOpen={() => setSetupOpen(true)} />
-					) : (
-						!configured && (
-							<button
-								type="button"
-								data-testid="setup-cta"
-								onClick={() => setSetupOpen(true)}
-								className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 hover:bg-accent cursor-pointer"
-							>
-								Set up your models
-							</button>
-						)
-					)
+					<>
+						<span className="contents max-sm:hidden">
+							{zeroKeys ? (
+								<ZeroKeysPill inline onOpen={() => setSetupOpen(true)} />
+							) : (
+								!configured && (
+									<button
+										type="button"
+										data-testid="setup-cta"
+										onClick={() => setSetupOpen(true)}
+										className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 hover:bg-accent cursor-pointer"
+									>
+										Set up your models
+									</button>
+								)
+							)}
+						</span>
+						{(zeroKeys || !configured) && <PhoneSetupNote />}
+					</>
 				}
 			/>
 			{/* First-run setup: the send interception's landing surface — stage

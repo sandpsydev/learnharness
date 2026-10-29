@@ -40,6 +40,7 @@
 
 import type { ReactNode } from "react";
 import { SidebarToggle } from "@/components/sidebar";
+import { PhoneBack } from "@/components/phone";
 
 export function TopBar({
 	drag = true,
@@ -56,6 +57,8 @@ export function TopBar({
 			className={`${drag ? "lh-drag " : ""}lh-wco-gutter flex h-15 select-none items-center gap-3 border-b border-border px-3`}
 		>
 			<SidebarToggle />
+			{/* Pocket mode: the sidebar is hidden on a phone, so this is the way back. */}
+			<PhoneBack />
 			{children}
 		</header>
 	);

@@ -92,7 +92,7 @@ import { currentUserThinkingOpen, setAllUserThinkingOpen } from "@/components/th
  * deliberately narrower (~46rem centered) per the reference. Same ELEMENT,
  * same place — width polish only.
  */
-const COLUMN = "mx-auto w-full max-w-none px-6";
+const COLUMN = "mx-auto w-full max-w-none px-6 max-sm:px-4";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
 // The DOCK container's fixed width (46rem) and the plan marginalia's
 // geometry (owner, plan-placement round): the bare diagram sits in the
@@ -1315,7 +1315,7 @@ export function Chat({
 								spellCheck={false}
 								aria-label="Session title"
 								title="Rename this session"
-								className="lh-no-drag min-w-[8ch] max-w-[70%] shrink-0 bg-transparent font-title text-3xl tracking-tight caret-current outline-none [field-sizing:content]"
+								className="lh-no-drag min-w-[8ch] max-w-[70%] shrink-0 bg-transparent font-title text-3xl max-sm:text-xl tracking-tight caret-current outline-none [field-sizing:content]"
 							/>
 							{/* flex-1 spacer during rename too, so the chips stay at
 							    the right edge; clicks here commit via the header
@@ -1336,7 +1336,7 @@ export function Chat({
 								setTitleDraft(titleText);
 								setRenaming(true);
 							}}
-							className="lh-no-drag -mx-1.5 min-w-4 shrink cursor-text truncate rounded-md px-1.5 text-left font-title text-3xl tracking-tight transition-colors hover:bg-accent"
+							className="lh-no-drag -mx-1.5 min-w-4 shrink cursor-text truncate rounded-md px-1.5 text-left font-title text-3xl max-sm:text-xl tracking-tight transition-colors hover:bg-accent"
 						>
 							{titleText}
 							</button>
@@ -1358,7 +1358,7 @@ export function Chat({
 								blurAfterPointerClick(e);
 								setPlanOpen(true);
 							}}
-							className="lh-no-drag flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+							className="lh-no-drag flex shrink-0 max-sm:hidden cursor-pointer items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:border-border hover:text-foreground"
 						>
 							<WaypointsIcon className="size-3.5 text-primary" aria-hidden />
 							Plan
@@ -1372,7 +1372,11 @@ export function Chat({
 					{/* Practice (owner, 2026-10-04): the coverage ring hides —
 				    practice never extracts, so an ever-filling ring with no
 				    run behind it would lie. */}
-					{kind !== "practice" && <CoverageRing chatId={chatId} refreshKey={coverageTick} />}
+					{kind !== "practice" && (
+						<span className="contents max-sm:hidden">
+							<CoverageRing chatId={chatId} refreshKey={coverageTick} />
+						</span>
+					)}
 					{/* Practice sessions: no phase arc — a quiet Practice tag
 					    instead of the phase chip. */}
 					{kind === "practice" ? (
@@ -2333,11 +2337,13 @@ function DockOverlay({
 	return (
 		<div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ right: sbInset }}>
 			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
-			<div ref={blockRef} className="relative bg-background pb-5">
+			<div ref={blockRef} className="relative bg-background pb-5 max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
 				<div className={DOCK}>
 					<div ref={viewportRef} data-dock-viewport="" className="pointer-events-auto">
 					<div ref={bodyRef}>
-					{setupCta}
+					{/* Pocket mode: connecting models is a settings job, so no setup
+					    button on a phone (the draft screen says "on the Mac"). */}
+					{setupCta && <div className="contents max-sm:hidden">{setupCta}</div>}
 					{/* The queued-steer indicator (owner spec 2026-10-03): quiet
 					    one-liners above the shell - right-aligned to where its corner
 					    rounding starts, truncated, no background, no container. A
@@ -2412,15 +2418,20 @@ function DockOverlay({
 					{/* The stats row: beneath the composer/question shell, not
 					    flush to the screen bottom — static height, outside the
 					    morphing shell so it never joins a height animation. */}
-					<StatsBar
-						turns={turns}
-						contextTokens={contextTokens}
-						cliContextWindow={cliContextWindow}
-						pricing={pricing}
-						dictationSlot={dictationSlot}
-						chatId={chatId}
-						onModelChange={onModelChange}
-					/>
+					{/* Pocket mode: on a phone the stats row (cost, context, model
+					    picker, mic) is dropped — the keyboard has its own dictation,
+					    and picking models is a settings job for the Mac. */}
+					<div className="contents max-sm:hidden">
+						<StatsBar
+							turns={turns}
+							contextTokens={contextTokens}
+							cliContextWindow={cliContextWindow}
+							pricing={pricing}
+							dictationSlot={dictationSlot}
+							chatId={chatId}
+							onModelChange={onModelChange}
+						/>
+					</div>
 					{/* The scroll-down disc (moved here from the Conversation,
 					    owner refinement round 2026-09-24): anchored to the BLOCK's
 					    top edge — above the composer shell AND the stats row, in

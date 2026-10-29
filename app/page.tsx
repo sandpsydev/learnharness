@@ -1,4 +1,6 @@
 import { Home } from "@/components/home";
+import { PhoneHome } from "@/components/phone-home";
+import { ResponsiveSwitch } from "@/components/phone";
 import { readSettingsRecord } from "@/src/server";
 import { resolveSettings, slotsConfigured } from "@/src/core";
 
@@ -16,7 +18,13 @@ export default function HomePage() {
 	// the chains view. Resolved through the one core resolver (missing
 	// section / absent key → factory default on); re-read per navigation.
 	const rendering = resolveSettings(record ?? null).graph.rendering;
+	const configured = slotsConfigured(record?.models);
+	// Pocket mode (Phase 8): below 640px the home is the phone's own screen;
+	// from 640px up it is exactly the graph home it always was.
 	return (
-		<Home initialConfigured={slotsConfigured(record?.models)} rendering={rendering} />
+		<ResponsiveSwitch
+			desktop={<Home initialConfigured={configured} rendering={rendering} />}
+			phone={<PhoneHome initialConfigured={configured} />}
+		/>
 	);
 }

@@ -2,7 +2,7 @@
 
 Pocket mode lets you jot down questions on the ward from your phone, and teach from them at home on the Mac. The Mac does all the work; your phone is just a window onto it. Everything stays on your own devices, it costs nothing, and only you can reach it.
 
-Plan: [`medical-spec.md`](medical-spec.md), Phase 8. Right now the phone side is the **capture inbox**. Quick practice, phone-sized sessions and the Expert AI queue come in a later update.
+Plan: [`medical-spec.md`](medical-spec.md), Phase 8. The phone side has the **capture inbox**, **quick practice**, phone-sized **sessions** (including Explain my miss) and a view-only **Expert AI queue**.
 
 ## What you need (one time)
 
@@ -54,6 +54,16 @@ While phone access is on, **use the Mac link in your browser instead of the desk
 3. Type a question or topic in the box and tap **Save for tonight**, or **Save & start now** to begin a teaching session right away. The phone keyboard's microphone key dictates for you.
 
 At the Mac, your saved items show on the home screen under **Tonight's questions**. Tap **Start session** to teach from one, **Done** when finished with it, or the bin to delete it. Starting a session marks the question done.
+
+## What's on the phone
+
+A bar at the bottom has three tabs. On a phone-sized screen the sidebar is hidden; use the back arrow at the top of a session to return home.
+
+- **Home:** the capture box, **Tonight's questions**, **New teaching session**, **Explain my miss**, and **Continue** (your recent sessions, newest first).
+- **Practice:** tap one or more organ systems (or none for everything), then **Start a 5-question round**. You get short A–E questions drawn from your own notes; tap an answer, then submit. A system's chip is greyed out until you have notes tagged with it.
+- **Expert AI:** the questions waiting to be asked. It's only for looking: asking happens on the Mac, in Chrome.
+
+Setting up your models is a Mac job, so the phone says so instead of opening settings.
 
 ## Turning it off
 

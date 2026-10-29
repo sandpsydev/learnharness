@@ -606,7 +606,7 @@ function QuestionDockForm({
 									data-kbdrow={i}
 									onClick={() => toggle(i)}
 									className={cn(
-										"flex items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm outline-none transition-colors",
+										"flex items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm outline-none transition-colors max-sm:min-h-12 max-sm:py-3",
 										isSel ? "border-primary bg-accent" : "hover:bg-accent/50",
 										i === kbdIdx && !isSel && "ring-1 ring-border bg-accent/40",
 									)}
@@ -658,7 +658,7 @@ function QuestionDockForm({
 								className={cn(
 									// Option-row layout + radio circle (owner); the dashed
 									// outline stays — this is the deliberate non-answer.
-									"flex items-start gap-3 rounded-lg border border-dashed px-3 py-2 text-left text-sm outline-none transition-colors",
+									"flex items-start gap-3 rounded-lg border border-dashed px-3 py-2 text-left text-sm outline-none transition-colors max-sm:min-h-12 max-sm:py-3",
 									sel.dontKnow ? "border-primary text-foreground" : "text-muted-foreground",
 									kbdIdx === optionCount && !sel.dontKnow && "ring-1 ring-border bg-accent/40",
 								)}

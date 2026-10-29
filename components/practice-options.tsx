@@ -25,7 +25,7 @@ export function PracticeOptionList({ options, selected, onSelect }: {
 					<button key={letter} type="button" aria-pressed={picked} data-option={letter}
 						onClick={() => onSelect(letter)}
 						className={cn(
-							"flex items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary",
+							"flex items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary max-sm:min-h-12 max-sm:py-3",
 							picked ? "border-primary bg-accent" : "hover:bg-accent/50",
 						)}>{content}</button>
 				) : <div key={letter} className="flex items-start gap-3 text-sm">{content}</div>;

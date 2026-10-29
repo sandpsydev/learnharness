@@ -16,6 +16,7 @@ import { StatsBar } from "@/components/stats-bar";
 import { OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
 import { PathInput } from "@/components/path-input";
 import { SessionStarter } from "@/components/start-session";
+import { TonightsQuestions } from "@/components/captures";
 import type { TurnUsage } from "@/src/core";
 
 /**
@@ -219,6 +220,7 @@ export function Home({
 					    send consumes it). Practice mode with nothing picked
 					    shows the pick HINT so the affordance is discoverable;
 					    teaching mode with nothing picked renders nothing. */}
+					<TonightsQuestions />
 					<ComposerActions
 						picker={(practiceProps.length > 0 || mode === "practice") && (
 							<NodePickerControl

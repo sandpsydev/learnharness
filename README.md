@@ -53,6 +53,8 @@ Add your provider API key and choose your models, then start a session with what
 
 All three platforms support in-app updates.
 
+**From your phone (medical fork):** jot down questions on the ward and teach from them at the Mac later — see the [pocket mode guide](docs/pocket-mode.md).
+
 **Dictation:** Create a [Deepgram API key](https://console.deepgram.com/) with the **Member role or higher** ([required for token minting](https://developers.deepgram.com/reference/auth/tokens/grant)) and add it under **Settings → Providers → Dictation**. Choose the language below the key; **Multilingual** supports automatic recognition and mixed-language speech. A `403 Insufficient permissions` error during token minting can indicate an insufficient key role.
 
 ## Your keys, your data

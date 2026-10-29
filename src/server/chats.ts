@@ -4,6 +4,7 @@ import { coverageOf } from "../core/coverage.ts";
 import { deleteChatTraces, type ChatDeleteMode, type ChatDeletionStats } from "../core/graph-deletion.ts";
 import { titleFromPrompt } from "../core/contracts.ts";
 import { graphRevision } from "./graph.ts";
+import { readSettings } from "../store/settings.ts";
 import { stores } from "./stores.ts";
 import { isTurnRunning } from "./turn-liveness.ts";
 import { clearTurnFailure } from "./turn-runs.ts";
@@ -23,6 +24,24 @@ import { discardChatDeliveries } from "./jobs.ts";
 
 export const { createChat, getChat, listChats } = stores.chatStore;
 export { titleFromPrompt };
+
+/** Create a session and stamp it from the STRONG slot — a session owns its
+ *  model + thinking level from birth (per-session models, owner 2026-09-28).
+ *  No strong slot configured (fresh BYOK boot) → no stamp; the turn gate's
+ *  503 models_not_configured refuses honestly until setup fills the slot.
+ *  The caller shapes the title (titleFromPrompt, or a fixed one like the miss
+ *  flow's). Shared by POST /api/chats and the capture inbox's "start a session". */
+export function createStampedChat(title: string, kind?: "practice") {
+	const chat = stores.chatStore.createChat(title, kind);
+	const strong = readSettings()?.models?.strong;
+	if (strong?.model) {
+		stores.chatStore.saveSettings(chat.id, {
+			model: { provider: strong.model.provider, id: strong.model.id },
+			thinkingLevel: strong.thinkingLevel,
+		});
+	}
+	return chat;
+}
 export type { ChatDeleteMode, ChatDeletionStats } from "../core/graph-deletion.ts";
 
 /** How long the wind-down wait may take before the caller gets a retryable

@@ -6,6 +6,7 @@
  * file (and the adapter implementations in src/store/).
  */
 
+import { captureStore } from "../store/captures.ts";
 import { chatStore } from "../store/chats.ts";
 import { graphStore } from "../store/graph.ts";
 import { jobStore } from "../store/jobs.ts";
@@ -22,6 +23,7 @@ export const stores = {
 	settingsStore,
 	libraryStore,
 	verifyStore,
+	captureStore,
 };
 
 export type Stores = typeof stores;

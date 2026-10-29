@@ -27,6 +27,8 @@ import type {
 	NotesSource,
 	LibraryBook,
 	LibraryChunk,
+	CaptureItem,
+	CaptureStatus,
 	VerifyHighlight,
 	VerifyItem,
 	VerifyStatus,
@@ -191,6 +193,20 @@ export interface VerifyStore {
 	/** Drop every queue item and highlight of a chat (session deletion).
 	 *  Returns how many records were removed. */
 	deleteForChat(chatId: string): number;
+}
+
+// ─── CaptureStore — the capture inbox (data/captures) ─────────────────────────
+
+export interface CaptureStore {
+	/** Save a new open capture (text already validated by parseCaptureBody). */
+	add(text: string): CaptureItem;
+	get(id: string): CaptureItem | null;
+	/** Newest first. Absent status = every capture. */
+	list(status?: CaptureStatus): CaptureItem[];
+	/** Mark open/done (optionally linking the session started from it); null if unknown id. */
+	update(id: string, patch: { status?: CaptureStatus; chatId?: string }): CaptureItem | null;
+	/** True when something was removed. */
+	remove(id: string): boolean;
 }
 
 // ─── SettingsStore — THE user settings record (settings-storage wave, 2026-09-19) ──

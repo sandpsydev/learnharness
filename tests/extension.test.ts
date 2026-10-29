@@ -355,6 +355,28 @@ describe("extension learner-action controller", () => {
 });
 
 describe("extension config and transport boundaries", () => {
+  it("uses the default global fetch with a browser-compatible receiver", async (t) => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const ping = { ok: true, app: "learnharness", apiVersion: 1, authenticated: true };
+    t.mock.method(globalThis, "fetch", function (this: unknown, input: RequestInfo | URL, init?: RequestInit) {
+      if (this !== undefined && this !== globalThis) {
+        throw new TypeError("Failed to execute 'fetch' on 'ServiceWorkerGlobalScope': Illegal invocation");
+      }
+      calls.push({ url: String(input), init });
+      return Promise.resolve(Response.json(String(input).endsWith("/ping") ? ping : { ok: true }));
+    });
+    assert.throws(() => Reflect.apply(globalThis.fetch, {}, ["http://127.0.0.1:47615/v1/ping"]), /Illegal invocation/);
+    const api = new VerifyApi({ ...DEFAULT_CONFIG, token: "fixture-token" });
+    assert.deepEqual(await api.ping(), ping);
+    const highlight = { text: "Fixture passage", url: "https://example.org/guideline" };
+    await api.highlight(highlight);
+    assert.deepEqual(calls.map(({ url, init }) => [url, init?.method]), [
+      ["http://127.0.0.1:47615/v1/ping", "GET"],
+      ["http://127.0.0.1:47615/v1/highlights", "POST"],
+    ]);
+    assert.ok(calls.every(({ init }) => new Headers(init?.headers).get("Authorization") === "Bearer fixture-token"));
+    assert.equal(calls[1]!.init?.body, JSON.stringify(highlight));
+  });
   it("accepts only HTTP loopback app addresses and the exact Expert AI HTTPS origin", () => {
     assert.equal(validateConfig({ ...DEFAULT_CONFIG, appUrl: "http://localhost:9999/" }).appUrl, "http://localhost:9999");
     for (const appUrl of ["https://127.0.0.1:47615", "http://example.org", "http://127.0.0.1:47615/api", "http://user:secret@localhost", "http://localhost/?token=x"]) {

@@ -178,8 +178,10 @@ describe("the source-derived segment list", () => {
 			[
 				"system-prompt.md",
 				"prober/10-probe-doctrine.md",
+				"prober/11-medical-goal.md",
 				"prober/20-miss-flow.md",
 				"shared/10-voice.md",
+				"shared/12-learner.md",
 				"shared/15-accuracy.md",
 				"shared/16-mental-model.md",
 				"shared/20-question-tools.md",
@@ -246,6 +248,19 @@ describe("the source-derived segment list", () => {
 		assert.ok(practice.includes("Remembered guidance stays explicitly unverified"));
 		assert.ok(practice.includes("including in the hidden solution"));
 		assert.ok(practice.includes("Out of scope: lab/ECG/image interpretation, long-case MEQ"));
+	});
+
+	it("composes learner context for every agent and the medical goal amendment only for the prober", () => {
+		const learner = fs.readFileSync(path.resolve(import.meta.dirname, "../src/agent/prompts/shared/12-learner.md"), "utf-8").trim();
+		const amendment = fs.readFileSync(path.resolve(import.meta.dirname, "../src/agent/prompts/prober/11-medical-goal.md"), "utf-8").trim();
+		for (const kind of ["teacher", "prober", "practice"] as const) {
+			const prompt = teacherAgent.composeInstructions(kind);
+			assert.ok(prompt.includes(learner), `${kind} receives the full shared learner context`);
+			assert.equal(effectivePromptSegments(kind, {}).filter((s) => s.path === "shared/12-learner.md" && s.shared).length, 1);
+			assert.equal(prompt.includes(amendment), kind === "prober");
+		}
+		const prober = teacherAgent.composeInstructions("prober");
+		assert.ok(prober.indexOf("# Medical goal — amendment") > prober.indexOf("## 2. Make the goal concrete"));
 	});
 
 	it("effective segments: switch+file → override; either missing → source text", () => {

@@ -321,6 +321,9 @@ export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
 	auditor: "cheap",
 	visualMaker: "vision",
 	pdfReader: "vision",
+	// The graph organizer converses and makes judgment calls about the
+	// learner's knowledge map, so it draws the strong slot.
+	organizer: "strong",
 };
 
 /** General settings — app-level behavior. Version DISPLAY and plans login

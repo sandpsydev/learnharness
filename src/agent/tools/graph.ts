@@ -100,7 +100,7 @@ export function proberGraphTools(ctx: GraphToolContext): Record<string, AgentToo
 
 /** Glob match — `*` spans anything, case-insensitive. `*needle*` is the
  *  expected shape; a bare term gets implicit surrounding stars. */
-function globMatch(pattern: string, text: string): boolean {
+export function globMatch(pattern: string, text: string): boolean {
 	const raw = pattern.includes("*") ? pattern : `*${pattern}*`;
 	const re = new RegExp(
 		`^${raw.replace(/[.*+?^${}()|[\]\\]/g, (ch) => (ch === "*" ? "[\\s\\S]*" : `\\${ch}`))}$`,

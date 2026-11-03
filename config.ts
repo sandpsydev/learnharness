@@ -60,7 +60,9 @@ export type ModelRole =
 	| "visualMaker"
 	| "pdfReader"
 	| "extractor"
-	| "auditor";
+	| "auditor"
+	/** The knowledge-organizer on the graph page (medical fork). */
+	| "organizer";
 
 /**
  * The LIVE graph store (src/store/graph.ts) — owned by the app's extraction
@@ -86,6 +88,10 @@ export const SOURCES_FILE = path.join(PATHS.graph, "sources.json");
 /** The layout ledger (read-modify-write like sources.json): nodeId →
  *  {x,y} resting positions from the incremental settle (core/layout.ts).
  *  Carries an updatedAt stamp for future live-physics conflict handling. */
+/** The knowledge-organizer's undo journal (medical fork): the line-level
+ *  diff of every applied change set, so the latest one can be undone. A
+ *  small JSON file, read-modify-write; absent = nothing applied yet. */
+export const ORGANIZER_HISTORY_FILE = path.join(PATHS.graph, "organizer-history.json");
 export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
 
 /**

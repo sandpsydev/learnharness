@@ -75,19 +75,19 @@ export interface GraphDeps {
 }
 
 /** "n_" + 12 hex chars (contracts.ts GraphNode.id — store-assigned). */
-function newGraphNodeId(): string {
+export function newGraphNodeId(): string {
 	return `n_${randomBytes(6).toString("hex")}`;
 }
 
 /** "arg_" + 12 hex chars — the implication-node namespace (a chain's id
  *  IS its derived node's id; collision-free with n_ by construction). */
-function newGraphChainId(): string {
+export function newGraphChainId(): string {
 	return `arg_${randomBytes(6).toString("hex")}`;
 }
 
 /** A chain's merge key: sorted premises + conclusion — the identity an
  *  assertion re-stating the same argument merges under. */
-function chainKey(premises: ReadonlyArray<string>, conclusion: string): string {
+export function chainKey(premises: ReadonlyArray<string>, conclusion: string): string {
 	return `${[...premises].sort().join("+")}>${conclusion}`;
 }
 
@@ -123,7 +123,7 @@ function pointOf(chatId: string, messageId?: string): ProvenancePoint[] {
 /** The tag fields of a proposition (or tag request), cleaned: only the
  *  fields that carry a known value are present, so a node line never gains
  *  empty `systems: []` / `factType: undefined` keys. */
-function tagFields(tags: { systems?: unknown; factType?: unknown }): { systems?: OrganSystem[]; factType?: FactType } {
+export function tagFields(tags: { systems?: unknown; factType?: unknown }): { systems?: OrganSystem[]; factType?: FactType } {
 	const systems = sanitizeSystems(tags.systems);
 	const factType = sanitizeFactType(tags.factType);
 	return {
@@ -400,7 +400,7 @@ export function simplifyChains(lines: GraphChain[]): GraphChain[] {
 /** A tag-only node line: it names the node by id and carries NO phrasing and
  *  NO provenance, so reading it back (getGraph) changes nothing but the
  *  tags. Appended — an existing ledger line is never rewritten. */
-function tagLine(node: GraphNode, tags: { systems?: OrganSystem[]; factType?: FactType }, edited: boolean): GraphNode {
+export function tagLine(node: GraphNode, tags: { systems?: OrganSystem[]; factType?: FactType }, edited: boolean): GraphNode {
 	return {
 		id: node.id,
 		name: "",

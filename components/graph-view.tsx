@@ -77,6 +77,7 @@ import { useServerEvent, useServerResync } from "@/components/server-events";
 import { MenuShell } from "@/components/menu-shell.tsx";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog.tsx";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
+import { GraphOrganizerControl } from "@/components/graph-organizer.tsx";
 import { AnkiDialog } from "@/components/anki-dialog";
 import { Hint } from "@/components/ui/hint";
 import {
@@ -861,6 +862,7 @@ export function GraphChromeRow({
 	changeSettings,
 	onOpenChains,
 	tags,
+	organizer,
 }: {
 	isEmpty: boolean;
 	query: string;
@@ -880,6 +882,9 @@ export function GraphChromeRow({
 	/** The medical tag filters + back-fill (Phase 4) — a Tags control
 	 *  between Chains and Import, rendered only when supplied. */
 	tags?: React.ComponentProps<typeof GraphTagsPanel>;
+	/** The knowledge-organizer agent (medical fork) — an Organize control
+	 *  after Tags, rendered only when supplied. */
+	organizer?: React.ComponentProps<typeof GraphOrganizerControl>;
 }) {
 	return (
 		<>
@@ -929,6 +934,11 @@ export function GraphChromeRow({
 			{!isEmpty && tags && (
 				<div className="graph-chrome-fade-in shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
 					<GraphTagsPanel {...tags} />
+				</div>
+			)}
+			{!isEmpty && organizer && (
+				<div className="graph-chrome-fade-in shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
+					<GraphOrganizerControl {...organizer} />
 				</div>
 			)}
 			{/* Import notes — its own container (36px, header band); ALWAYS
@@ -1650,6 +1660,14 @@ export function GraphView({
 						// The back-fill appended lines: refetch the snapshot.
 						onBackfilled: (graphRevision) =>
 							window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { graphRevision } })),
+					}}
+					organizer={{
+						// An applied or undone change set rewrote the ledgers: refetch.
+						// The open detail card may now show an old name or statement: close it.
+						onGraphChanged: (graphRevision) => {
+							setSelected(null);
+							window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { graphRevision } }));
+						},
 					}}
 				/>
 			</div>

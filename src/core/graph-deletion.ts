@@ -147,6 +147,16 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 	for (const line of nodeLines) {
 		if (survives(line.provenance)) live.add(line.id);
 	}
+	// A node NO line of which ever cited a session was made by the learner
+	// (the knowledge-organizer creates such nodes). No chat produced it, so
+	// no chat's deletion may take it — it is not "orphaned", it is theirs.
+	const everCited = new Set<string>();
+	for (const line of nodeLines) {
+		if (line.provenance.length > 0) everCited.add(line.id);
+	}
+	for (const line of nodeLines) {
+		if (!everCited.has(line.id)) live.add(line.id);
+	}
 
 	// 2. Node lines. Per-line (each line is ONE extraction run's append, so
 	//    per-session alias provenance exists at line granularity):

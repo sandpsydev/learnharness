@@ -73,6 +73,9 @@ export * from "./dictation.ts";
 // dialog's two-option design + the DELETE query param) and the stats
 // shape its success line describes, hence this type-only re-export.
 export type { ChatDeleteMode, ChatDeletionStats } from "./graph-deletion.ts";
+// organizer-types.ts: the knowledge-organizer change/preview/history shapes
+// (types + two constants; the engine itself, graph-organizer.ts, is server-only).
+export * from "./organizer-types.ts";
 export * from "./settings-resolution.ts";
 export * from "./search.ts"; // search port (search wave, 2026-09-20)
 export * from "./session-find.ts";

@@ -28,6 +28,8 @@ import type {
 import { BACKGROUND_MODEL_ROLES, COMPACTION_THRESHOLD_FLOOR, CUSTOM_MODEL_PIN_FLOOR, EXTRACTION_CHUNK_TOKENS_FLOOR, MODEL_SLOTS } from "../core/settings.ts";
 import { WRITABLE_TOOL_KEYS } from "../core/pending.ts";
 import { isDictationLanguage } from "../core/dictation.ts";
+import type { ObsidianSettings } from "../core/settings.ts";
+import * as os from "node:os";
 
 /** Parsed-or-rejected — `ok: false` carries the 400's error message. */
 export type SettingsBodyResult<T> =
@@ -437,6 +439,23 @@ export function parseCustomModelOverridesBody(
 
 /** The section→parser map for PUT /api/settings/[section]. The custom endpoint
  *  is NOT a section — it connects via POST /api/custom-provider. */
+/** obsidian: { vaultPath?: string } — "~" is expanded; an empty path turns the copy off. */
+export function parseObsidianSettingsBody(body: unknown): SettingsBodyResult<ObsidianSettings> {
+	const raw = asRecord(body);
+	if (!raw) return { ok: false, error: "Invalid JSON body" };
+	if (raw.vaultPath === undefined || raw.vaultPath === null) return { ok: true, settings: {} };
+	if (typeof raw.vaultPath !== "string") return { ok: false, error: "vaultPath must be a string" };
+	let p = raw.vaultPath.trim();
+	if (p === "") return { ok: true, settings: {} };
+	if (p === "~" || p.startsWith("~/")) p = os.homedir() + p.slice(1);
+	if (!(p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p))) {
+		return { ok: false, error: "vaultPath must be the full path of a folder (starting with / or ~)." };
+	}
+	// Trailing separators carry no meaning.
+	p = p.length > 1 ? p.replace(/[\\/]+$/, "") || "/" : p;
+	return { ok: true, settings: { vaultPath: p } };
+}
+
 export const SETTINGS_SECTIONS = {
 	general: parseGeneralSettingsBody,
 	chat: parseSettingsBody,
@@ -447,6 +466,7 @@ export const SETTINGS_SECTIONS = {
 	models: parseModelsSettingsBody,
 	dictation: parseDictationSettingsBody,
 	claudeCode: parseClaudeCodeSettingsBody,
+	obsidian: parseObsidianSettingsBody,
 } as const;
 
 export type SettingsSectionName = keyof typeof SETTINGS_SECTIONS;

@@ -20,3 +20,4 @@ export * from "./contracts/library.ts";
 export * from "./contracts/verify.ts";
 export * from "./contracts/anki.ts";
 export * from "./contracts/captures.ts";
+export * from "./contracts/review.ts";

@@ -324,6 +324,9 @@ export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
 	// The graph organizer converses and makes judgment calls about the
 	// learner's knowledge map, so it draws the strong slot.
 	organizer: "strong",
+	// Illness scripts are long, source-checked review text, and the illness
+	// list is a judgment over the whole graph: both want the strong slot.
+	scriptwriter: "strong",
 };
 
 /** General settings — app-level behavior. Version DISPLAY and plans login
@@ -459,6 +462,12 @@ export interface CompactionSettings {
 	thresholdTokens?: number;
 }
 
+/** The Obsidian copy (medical fork): where the learner's vault is. Off until set. */
+export interface ObsidianSettings {
+	/** Absolute path of the vault folder. The app writes only inside a LearnHarness/ folder in it. */
+	vaultPath?: string;
+}
+
 /** THE record. Every section optional (delta); unknown top-level keys are
  *  preserved verbatim by the sanitizer (forward-compat with newer records). */
 export interface UserSettings {
@@ -475,6 +484,7 @@ export interface UserSettings {
 	appearance?: AppearanceSettings;
 	graph?: GraphSettings;
 	compaction?: CompactionSettings;
+	obsidian?: ObsidianSettings;
 	[key: string]: unknown;
 }
 
@@ -784,6 +794,16 @@ function sanitizeCompaction(raw: Record<string, unknown>): CompactionSettings {
 	return out;
 }
 
+function sanitizeObsidian(raw: Record<string, unknown>): ObsidianSettings {
+	const out: ObsidianSettings = {};
+	// A stored path must be a non-empty absolute path; anything else is "not set".
+	if (typeof raw.vaultPath === "string") {
+		const p = raw.vaultPath.trim();
+		if (p !== "" && (p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p))) out.vaultPath = p;
+	}
+	return out;
+}
+
 /**
  * Coerce arbitrary JSON (disk file, network body) into a valid delta record:
  * known fields validated strictly (invalid ones drop/clamp per module doc),
@@ -830,6 +850,9 @@ export function sanitizeUserSettings(raw: unknown): UserSettings | null {
 		if (r.compaction !== undefined && r.compaction !== null && typeof r.compaction === "object") {
 			out.compaction = sanitizeCompaction(r.compaction as Record<string, unknown>);
 		}
+	}
+	if (r.obsidian !== null && typeof r.obsidian === "object" && !Array.isArray(r.obsidian)) {
+		out.obsidian = sanitizeObsidian(r.obsidian as Record<string, unknown>);
 	}
 	// Unknown top-level keys ride along untouched (forward-compat). One
 	// known-DEAD key is stripped instead of riding: `chat` (the old

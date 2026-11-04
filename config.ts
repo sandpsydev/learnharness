@@ -32,6 +32,10 @@ export const PATHS = {
 	/** Images the learner pastes or drops into the chat box (Explain my miss
 	 *  and any other session): saved here, then attached by path. */
 	attachments: path.join(DATA_ROOT, "attachments"),
+	/** Review mode (medical fork): the illness scripts the app has written,
+	 *  their images, and the illness list — LearnHarness's own copy, from
+	 *  which the Obsidian notes are rendered. */
+	review: path.join(DATA_ROOT, "review"),
 	/** Local embedding model files (downloaded once, then offline). */
 	models: path.join(DATA_ROOT, "models"),
 	/** Debug artifacts (env-gated): data/debug/provider-events/<chatId>.jsonl
@@ -62,7 +66,9 @@ export type ModelRole =
 	| "extractor"
 	| "auditor"
 	/** The knowledge-organizer on the graph page (medical fork). */
-	| "organizer";
+	| "organizer"
+	/** Review mode (medical fork): writes illness scripts and lists the illnesses in the graph. */
+	| "scriptwriter";
 
 /**
  * The LIVE graph store (src/store/graph.ts) — owned by the app's extraction

@@ -32,6 +32,8 @@ import type {
 	VerifyHighlight,
 	VerifyItem,
 	VerifyStatus,
+	IllnessScript,
+	IllnessCatalogue,
 } from "./contracts.ts";
 import type { UserSettings } from "./settings.ts";
 
@@ -309,4 +311,19 @@ export interface LibraryStore {
 	fingerprint(id: string): string;
 	/** Remove the book and every file of it. */
 	deleteBook(id: string): boolean;
+}
+
+// ─── ReviewStore — illness scripts, their images, the illness list (data/review) ───
+
+export interface ReviewStore {
+	/** Every script, newest first. */
+	listScripts(): IllnessScript[];
+	getScript(slug: string): IllnessScript | null;
+	/** Save a script with the image files it embeds (file name → bytes), replacing any earlier version. */
+	putScript(script: IllnessScript, assets: ReadonlyArray<{ file: string; bytes: Uint8Array }>): void;
+	/** An image file's bytes, or null when absent. */
+	readAsset(file: string): Uint8Array | null;
+	assetSize(file: string): number | null;
+	readCatalogue(): IllnessCatalogue | null;
+	writeCatalogue(catalogue: IllnessCatalogue): void;
 }

@@ -12,7 +12,7 @@ const answer: Answer = { text: "Generic completed guidance", references: [{ titl
 async function fixture(options: { automatic?: boolean; signedOut?: boolean; uncertain?: boolean; returnFails?: boolean; appOffline?: boolean } = {}) {
   const id = "local-fixture";
   const base = `chrome-extension://${id}/`;
-  const local: { config: Config } = { config: { ...DEFAULT_CONFIG, token: "private-fixture-token", automatic: options.automatic !== false } };
+  const local: { config: Config; attempt?: unknown } = { config: { ...DEFAULT_CONFIG, token: "private-fixture-token", automatic: options.automatic !== false } };
   const session: { state?: SessionState } = {};
   const queue: QueueItem[] = ["a", "b"].map((key) => ({ id: key, chatId: "chat", chatTitle: "Generic lesson", prompt: `Explain the management approach for generic condition ${key}.`, status: "queued", createdAt: "2026-10-30T00:00:00Z" }));
   const calls: string[] = [];
@@ -26,6 +26,12 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
   let appOffline = options.appOffline;
   let signedOut = options.signedOut;
   let bound: string | undefined;
+  // What the managed tab's page shows about the prompt, and whether it needs injecting first.
+  let probeVerdict: "sent" | "not-sent" | "unknown" | "busy" = "unknown";
+  let needsInjection = false;
+  let injected = 0;
+  const probes: string[] = [];
+  let askFails: string | undefined;
   const returns: Answer[] = [];
   const area = (data: object) => ({
     async setAccessLevel() {},
@@ -60,6 +66,12 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
       async update() { assert.fail("automatic work must not activate a tab"); },
       async sendMessage(tabId: number, message: { type: string; prompt: string; requestId: string; automatic: boolean }) {
         assert.equal(tabId, 99);
+        if (message.type === "lh-probe") {
+          if (needsInjection && !injected) throw new Error("Receiving end does not exist.");
+          probes.push(probeVerdict);
+          if (probeVerdict === "sent") bound = message.requestId; // The page adopts a sent prompt.
+          return { ok: true, verdict: probeVerdict, why: `fixture says ${probeVerdict}` };
+        }
         if (message.type === "lh-ready") return { ok: true };
         if (message.type === "lh-returned") { bound = undefined; return { ok: true }; }
         if (message.type === "lh-collect") {
@@ -68,6 +80,12 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
           return { ok: true, ...(completed ? { answer } : {}) };
         }
         assert.equal(message.type, "lh-ask");
+        if (askFails) {
+          // The page began filling, then failed before pressing Send, as Chrome did in the background.
+          const granted = await send({ type: "begin", requestId: message.requestId }, { id, frameId: 0, url: DEFAULT_CONFIG.expertUrl, tab: { id: tabId } });
+          assert.equal(granted.ok, true);
+          return { ok: false, submitted: false, untouched: false, error: askFails };
+        }
         if (signedOut) return { ok: false, submitted: false, untouched: true, error: "Sign in to Expert AI yourself." };
         const granted = await send({ type: "begin", requestId: message.requestId }, { id, frameId: 0, url: DEFAULT_CONFIG.expertUrl, tab: { id: tabId } });
         assert.equal(granted.ok, true);
@@ -75,6 +93,12 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
         bound = message.requestId;
         if (options.uncertain) throw new Error("Lost submit acknowledgement");
         return { ok: true, submitted: true };
+      },
+    },
+    scripting: {
+      async executeScript(value: { target: { tabId: number }; files: string[] }) {
+        assert.equal(JSON.stringify(value), JSON.stringify({ target: { tabId: 99, frameIds: [0] }, files: ["content.js"] }));
+        injected++;
       },
     },
     windows: {
@@ -126,6 +150,16 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
     fixReturn: () => { returnFails = false; },
     startApp: () => { appOffline = false; },
     loseBinding: () => { bound = undefined; },
+    probes, injected: () => injected,
+    probeSays: (verdict: typeof probeVerdict) => { probeVerdict = verdict; },
+    needInjection: () => { needsInjection = true; },
+    pageFails: (error: string | undefined) => { askFails = error; },
+    /** The state an extension reload leaves: local storage keeps the guard, session storage is gone. */
+    leftBehind: (phase: "starting" | "manual" | "uncertain" | "asked", cause?: string) => {
+      tabs.set(99, { id: 99, windowId: 2, active: false, url: DEFAULT_CONFIG.expertUrl });
+      local.attempt = { item: queue[0], requestId: "old-request", tabId: 99, automatic: true, startedAt: Date.now() - 600_000, phase, ...(cause ? { cause } : {}) };
+      session.state = undefined;
+    },
   };
 }
 
@@ -240,16 +274,105 @@ test("a browser restart that clears session storage preserves the no-resubmit gu
   h.tick(); await h.until(() => Boolean(h.session.state?.automaticPaused));
   h.session.state = undefined; // Chrome clears storage.session on browser restart.
   await h.boot(); h.tick();
-  await new Promise((r) => setImmediate(r));
+  await h.until(() => Boolean(h.session.state?.automaticPaused));
   const restored = await h.send({ type: "state" });
   assert.equal(restored.ok, true);
   const state = (restored as { ok: true; data: SessionState }).data;
   assert.equal(state.active!.phase, "uncertain");
-  assert.equal(state.active!.tabId, undefined, "old tab IDs are never trusted after restart");
-  assert.match(state.automaticPaused!, /browser restarted/);
+  assert.match(state.automaticPaused!, /could not prove whether it was sent.*did not confirm submission/s, "the first reason survives the restart");
   await h.send({ type: "save-config", config: h.local.config });
   await h.until(() => Boolean(h.session.state?.automaticPaused));
+  assert.match(h.session.state!.automaticPaused!, /did not confirm submission/, "saving settings does not replace the first reason with a generic one");
   assert.equal(h.submissions.length, 1);
+});
+
+test("a fill that never reaches Send stops cleanly with its specific reason and leaves nothing to release", async () => {
+  const h = await fixture();
+  h.pageFails("Expert AI did not show the expected fresh conversation or submit control. (The managed tab is in the background, where the page may not update.)");
+  h.tick(); await h.until(() => Boolean(h.session.state?.automaticPaused));
+  assert.equal(h.session.state!.active, undefined, "no stuck binding for the learner to release");
+  assert.equal(h.local.attempt, null, "the durable guard is cleared because nothing was sent");
+  assert.equal(h.queue[0]!.status, "queued");
+  assert.match(h.session.state!.automaticPaused!, /filled in but never submitted.*background/s);
+  assert.equal(h.calls.some((c) => c.endsWith("/asked")), false);
+  // Once the page can send, saving settings is all it takes.
+  h.pageFails(undefined);
+  await h.send({ type: "save-config", config: h.local.config });
+  await h.until(() => h.session.state?.active?.phase === "asked");
+  assert.equal(h.submissions.length, 1);
+});
+
+test("after a reload, an attempt the page proves was never sent goes back to the queue and is asked again", async () => {
+  for (const phase of ["manual", "uncertain", "starting"] as const) {
+    const h = await fixture();
+    h.leftBehind(phase, "Expert AI did not show the expected fresh conversation or submit control.");
+    h.probeSays("not-sent");
+    await h.boot();
+    h.tick();
+    await h.until(() => h.session.state?.active?.requestId !== undefined && h.session.state.active.requestId !== "old-request" && h.session.state.active.phase === "asked");
+    assert.equal(h.session.state!.automaticPaused, undefined, `no stuck pause from ${phase}`);
+    assert.equal(h.submissions.length, 1, "asked once, by the new attempt");
+    assert.equal(h.submissions[0]!.prompt, h.queue[0]!.prompt);
+    assert.equal(h.session.state!.managedTabId, 99, "the same managed tab is reused");
+    assert.deepEqual(h.probes, ["not-sent"]);
+  }
+});
+
+test("after a reload, an attempt the page proves was sent is collected and returned without a second submit", async () => {
+  for (const phase of ["asked", "starting", "uncertain"] as const) {
+    const h = await fixture();
+    h.leftBehind(phase, "The tab did not confirm submission.");
+    h.probeSays("sent");
+    h.ready();
+    await h.boot();
+    h.tick();
+    await h.until(() => h.returns.length === 1 && !h.session.state?.active);
+    assert.equal(h.submissions.length, 0, `${phase}: never submitted again`);
+    assert.equal(h.session.state!.automaticPaused, undefined);
+    assert.ok(h.calls.some((c) => c === "queue/a/asked"), "the app is told it was asked");
+  }
+});
+
+test("when the tab cannot prove it, the pause names what went wrong first and survives saving settings", async () => {
+  const h = await fixture();
+  h.leftBehind("manual", "Switch Expert AI to Standard, then retry.");
+  h.probeSays("unknown");
+  await h.boot();
+  h.tick(); await h.until(() => Boolean(h.session.state?.automaticPaused));
+  assert.match(h.session.state!.automaticPaused!, /fixture says unknown.*Switch Expert AI to Standard/s);
+  assert.equal(h.session.state!.active!.phase, "uncertain", "after a restart nothing is assumed");
+  assert.equal(h.submissions.length, 0);
+  await h.send({ type: "save-config", config: h.local.config });
+  await h.until(() => Boolean(h.session.state?.automaticPaused));
+  assert.match(h.session.state!.automaticPaused!, /Switch Expert AI to Standard/);
+  assert.match(h.session.state!.notice!, /Automatic Expert AI paused.*Switch Expert AI to Standard/s);
+  assert.equal(h.submissions.length, 0);
+});
+
+test("a missing or foreign tab is never trusted, and a tab without the script is injected then inspected", async () => {
+  const closed = await fixture();
+  closed.leftBehind("uncertain", "x"); closed.tabs.delete(99);
+  await closed.boot(); closed.tick(); await closed.until(() => Boolean(closed.session.state?.automaticPaused));
+  assert.match(closed.session.state!.automaticPaused!, /tab was closed/);
+  assert.equal(closed.submissions.length, 0);
+  const foreign = await fixture();
+  foreign.leftBehind("uncertain", "x"); foreign.tabs.get(99)!.url = "https://example.org/";
+  await foreign.boot(); foreign.tick(); await foreign.until(() => Boolean(foreign.session.state?.automaticPaused));
+  assert.match(foreign.session.state!.automaticPaused!, /no longer on Expert AI/);
+  const loaded = await fixture();
+  loaded.leftBehind("manual", "x"); loaded.needInjection(); loaded.probeSays("not-sent");
+  await loaded.boot(); loaded.tick();
+  await loaded.until(() => loaded.submissions.length === 1);
+  assert.equal(loaded.injected(), 1, "the page script was added once to inspect the old tab");
+});
+
+test("a page that is still working on the question is left alone until it finishes", async () => {
+  const h = await fixture();
+  h.leftBehind("starting", "x"); (h.local.attempt as { startedAt: number }).startedAt = Date.now();
+  h.probeSays("busy");
+  await h.boot(); h.tick(); await new Promise((r) => setTimeout(r, 20));
+  assert.equal(h.session.state?.automaticPaused, undefined);
+  assert.equal(h.submissions.length, 0);
 });
 
 test("manual Copy prompt takes over the current question until return or release", async () => {
@@ -284,4 +407,19 @@ test("starting the app after Chrome requires no popup click to discover its queu
   assert.equal(h.submissions.length, 0);
   h.startApp(); h.tick(); await h.until(() => h.session.state?.active?.phase === "asked");
   assert.equal(h.submissions.length, 1);
+});
+
+test("a manual question left behind by a restart still pauses automation and trusts no old tab ID", async () => {
+  const h = await fixture();
+  h.leftBehind("manual", "Sign in first.");
+  (h.local.attempt as { automatic: boolean }).automatic = false;
+  await h.boot();
+  const reply = await h.send({ type: "state" });
+  const state = (reply as { ok: true; data: SessionState }).data;
+  assert.equal(state.active!.phase, "uncertain");
+  assert.equal(state.active!.tabId, undefined);
+  assert.match(state.automaticPaused!, /browser restarted.*Sign in first/);
+  h.tick(); await new Promise((r) => setImmediate(r));
+  assert.deepEqual(h.probes, [], "a learner's manual question is never probed or released automatically");
+  assert.equal(h.submissions.length, 0);
 });

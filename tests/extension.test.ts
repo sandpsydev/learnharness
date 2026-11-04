@@ -10,7 +10,7 @@ import { DEFAULT_CONFIG, isExpertUrl, validateConfig } from "../extension/config
 import { Attempts } from "../extension/attempts";
 import { ExtensionController } from "../extension/controller";
 import type { ControllerPorts, PageResult } from "../extension/controller";
-import { ACCESS_HELP, EXPERT_PAGE, answerContainer, canSubmit, questionBox, readAnswerWithSources, conversationIsFresh, fillQuestion, readAnswer, startConversation, submitQuestion } from "../extension/expert-page";
+import { ACCESS_HELP, EXPERT_PAGE, answerContainer, canSubmit, clearDraft, promptEvidence, questionBox, readAnswerWithSources, conversationIsFresh, fillQuestion, readAnswer, startConversation, submitQuestion } from "../extension/expert-page";
 import type { Answer, QueueItem, SessionState } from "../extension/types";
 import { describePhase, referenceLines } from "../extension/ui";
 
@@ -595,7 +595,11 @@ describe("extension config and transport boundaries", () => {
     assert.equal(manifest.manifest_version, 3);
     assert.deepEqual(manifest.content_scripts[0].matches, ["https://ai.uptodate.com/*"]);
     assert.equal(manifest.content_scripts[0].all_frames, false);
-    assert.equal(manifest.permissions.includes("scripting"), false);
+    // `scripting` exists only so the worker can re-add its own content.js to an Expert AI tab that was
+    // loaded before an extension reload. Host access stays limited to Expert AI and the loopback app.
+    assert.equal(manifest.permissions.includes("scripting"), true);
+    assert.deepEqual(manifest.host_permissions, ["https://ai.uptodate.com/*", "http://127.0.0.1/*", "http://localhost/*"]);
+    assert.doesNotMatch(readFileSync(new URL("../extension/worker.ts", import.meta.url), "utf8"), /executeScript\([^)]*\b(func|code)\b/);
     assert.equal(manifest.permissions.includes("tabs"), false);
     assert.equal(manifest.externally_connectable, undefined);
     assert.equal(manifest.web_accessible_resources, undefined);
@@ -617,4 +621,31 @@ it("builds a self-contained unpacked extension in a temporary folder", async () 
     }
     assert.doesNotMatch(readFileSync(path.join(out, "content.js"), "utf8"), /Bearer|fetch\(/, "content script cannot call the local API or access the pairing token");
   } finally { rmSync(out, { recursive: true, force: true }); }
+});
+
+describe("what the page proves about a prompt", () => {
+  const prompt = "Generic question about\nmanagement of condition x.";
+  it("treats the prompt in the conversation, in any whitespace, as sent", () => {
+    const { document } = page();
+    document.querySelector("#answers")!.innerHTML = `<section><p>Generic question about</p><p>management of condition x.</p></section>`;
+    assert.equal(promptEvidence(document, prompt).verdict, "sent");
+  });
+  it("treats the prompt still in the start screen's composer, with no answer, as not sent", () => {
+    const { document, box } = page();
+    box.textContent = prompt; box.setAttribute("data-empty", "false");
+    assert.equal(promptEvidence(document, prompt).verdict, "not-sent");
+    clearDraft(document);
+    assert.equal(box.textContent, "");
+    assert.equal(promptEvidence(document, prompt).verdict, "unknown", "an empty page proves nothing either way");
+  });
+  it("will not call a prompt unsent once any answer exists, or when only part of it is there", () => {
+    const { document, box } = page();
+    box.textContent = prompt;
+    document.querySelector("#answers")!.innerHTML = answerFixture;
+    assert.equal(promptEvidence(document, prompt).verdict, "unknown");
+    const other = page();
+    other.box.textContent = "Generic question about";
+    assert.equal(promptEvidence(other.document, prompt).verdict, "unknown");
+    assert.equal(promptEvidence(other.document, "  ").verdict, "unknown");
+  });
 });

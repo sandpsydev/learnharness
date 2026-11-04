@@ -189,3 +189,55 @@ test("manual content still refuses hidden unfocused runs", async () => {
   assert.match(result.error!, /visible.*focused/);
   assert.deepEqual(h.log, []);
 });
+
+test("an automatic fill that never becomes sendable clears the draft, proves nothing was sent, and names the background tab", async () => {
+  const h = await load({ automatic: true, background: true, neverSendable: true });
+  const result = await h.ask();
+  assert.equal(result.ok, false);
+  assert.equal(result.submitted, false, "Send was never pressed");
+  assert.equal(result.untouched, false, "text had been filled in");
+  assert.match(result.error!, /background/i);
+  assert.equal(h.log.includes("submit"), false);
+  assert.equal(h.document.querySelector('[contenteditable="true"]')!.textContent, "", "the unsent draft was cleared");
+});
+
+test("probing a tab reports the unsent draft, adopts a sent prompt for collection, and refuses to guess", async () => {
+  const probe = (h: Awaited<ReturnType<typeof load>>, prompt: string, requestId = "old-request") => new Promise<{ ok: boolean; verdict?: string }>((resolve) => {
+    h.listener()({ type: "lh-probe", requestId, prompt }, { id: "local-fixture" }, (reply) => resolve(reply as { ok: boolean }));
+  });
+  // The prompt is still in the empty start screen's composer: not sent, and the draft is cleared.
+  const draft = await load({ automatic: true });
+  const box = draft.document.querySelector('[contenteditable="true"]')!;
+  box.textContent = "Generic   question\nabout care"; box.setAttribute("data-empty", "false");
+  assert.equal((await probe(draft, "Generic question about care")).verdict, "not-sent");
+  assert.equal(box.textContent, "");
+  assert.equal((await probe(draft, "Generic question about care")).verdict, "unknown", "an empty start screen proves nothing");
+  // The prompt is in the conversation: sent. The question is adopted, so its answer can be collected.
+  const sent = await load({ automatic: true });
+  sent.document.querySelector("#answers")!.innerHTML = `<section>Generic question about care</section>${answerHtml}`;
+  assert.equal((await probe(sent, "Generic question about care")).verdict, "sent");
+  sent.document.querySelector("#answers")!.innerHTML = `<section>Generic question about care</section>${answerHtml}`;
+  const button = sent.document.querySelector('[class*="sources-button_"]')!;
+  button.addEventListener("click", () => {
+    sent.document.body.insertAdjacentHTML("beforeend", readFileSync(new URL("./fixtures/extension/expert-ai-sources.html", import.meta.url), "utf8"));
+    button.setAttribute("aria-pressed", "true");
+    sent.document.querySelector('[data-e2e="drawer-close-btn"]')!.addEventListener("click", () => {
+      sent.document.querySelector('[data-e2e="fab-expy-sources-drawer"]')!.remove();
+      button.setAttribute("aria-pressed", "false");
+    });
+  });
+  const collected = await sent.collect("old-request");
+  assert.equal(collected.ok, true, collected.error);
+  assert.match(collected.answer!.text, /Example medicine/);
+  assert.equal(sent.log.includes("submit"), false, "adopting never submits");
+});
+
+test("injecting the content script twice installs one handler", async () => {
+  const compiled = await bundled;
+  let handlers = 0;
+  const context = { document: parseHTML(fixture).document, location: { href: "https://example.org/x" }, MutationObserver: class { observe() {} disconnect() {} },
+    chrome: { runtime: { id: "local-fixture", onMessage: { addListener() { handlers++; } }, sendMessage: async () => ({}) } } };
+  runInNewContext(compiled.outputFiles[0]!.text, context);
+  runInNewContext(compiled.outputFiles[0]!.text, context);
+  assert.equal(handlers, 1);
+});

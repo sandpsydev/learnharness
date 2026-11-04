@@ -6,6 +6,8 @@ import type { ActiveQuestion, Answer, Highlight, QueueItem, SessionState } from 
 
 /** `untouched` means it is certain nothing was filled or submitted. */
 export interface PageResult { ok: boolean; submitted: boolean; untouched?: boolean; error?: string }
+/** What the managed tab proves about a question whose outcome was lost. */
+export interface Evidence { verdict: "sent" | "not-sent" | "busy" | "unknown"; why: string; tabId?: number }
 export interface ControllerPorts {
   api(): Promise<VerifyApi>;
   read(): Promise<SessionState>;
@@ -17,6 +19,8 @@ export interface ControllerPorts {
   clipboard(text: string): Promise<void>;
   /** True only when the page provably never began filling this request. */
   closeAttempt(requestId: string): Promise<boolean>;
+  /** Look at the question's tab for proof that its prompt was, or was not, sent. */
+  probe?(active: ActiveQuestion): Promise<Evidence>;
 }
 function validateAnswer(answer: Answer) {
   if (!answer || typeof answer.text !== "string" || !answer.text.trim() || answer.text.length > VERIFY_LIMITS.answerChars) {
@@ -53,6 +57,7 @@ export class ExtensionController {
       // The lock proves no attempt is running now, so a saved "starting" was cut off
       // (for example by a worker restart). It may have sent the question.
       state.active.phase = "uncertain";
+      state.active.cause ??= "An earlier attempt was cut off before it finished.";
       const notice = "An earlier attempt was cut off. Check the Expert AI tab, then return its answer or release the question in the popup.";
       await this.ports.write({ ...state, notice });
       throw new Error(notice);
@@ -95,8 +100,12 @@ export class ExtensionController {
         : { ok: false, submitted: true, error: "The tab did not confirm submission. Check it before manually pasting or retrying." };
     }
     if (!result.ok && result.untouched && !result.submitted) return this.stopCleanly(state, result);
+    // Automatic runs have no learner to finish a half-done attempt. The page set `submitted`
+    // only just before pressing Send, so `false` proves nothing was sent; the draft is cleared.
+    if (!result.ok && automatic && !result.submitted) return this.stopCleanly(state, result, true);
     if (!result.ok) {
       active.phase = result.submitted ? "uncertain" : "manual";
+      active.cause = result.error ?? "Page controls unavailable.";
       const copied = automatic ? "" : await this.copy(item.prompt);
       const notice = `${result.error ?? "Page controls unavailable."} ${copied} Use manual paste-back in the extension.`;
       await this.ports.write({ ...state, active, notice });
@@ -107,14 +116,17 @@ export class ExtensionController {
     try { await api.asked(item.id); }
     catch (error) {
       active.phase = "uncertain";
+      active.cause = `The question was submitted, but the app did not confirm its status (${errorMessage(error)}).`;
       await this.ports.write({ ...state, active, notice: "Question submitted, but the app did not confirm its status. Return its answer manually; do not submit it again." });
       throw error;
     }
     await this.ports.write({ ...state, active, notice: automatic ? "Question submitted. Its finished answer will return automatically." : "Question submitted. Read the answer, then choose Send to LearnHarness." });
   }
   /** Nothing reached Expert AI: go back to how things were and leave the item queued. */
-  private async stopCleanly(before: SessionState, result: PageResult): Promise<never> {
-    const notice = `Nothing was sent to Expert AI and the question is still queued. If Expert AI asks you to sign in, sign in there, then click Ask in Expert AI again. (${result.error ?? "The page was not ready."})`;
+  private async stopCleanly(before: SessionState, result: PageResult, filled = false): Promise<never> {
+    const what = filled ? "The question was filled in but never submitted (the draft was cleared)" : "Nothing was sent to Expert AI";
+    const next = filled ? "Fix what the page reported, then save extension settings to try again." : "If Expert AI asks you to sign in, sign in there, then click Ask in Expert AI again.";
+    const notice = `${what} and the question is still queued. ${next} (${result.error ?? "The page was not ready."})`;
     await this.ports.write({ ...before, notice });
     throw new Error(notice);
   }
@@ -174,6 +186,36 @@ export class ExtensionController {
       await this.ports.write({ ...state, automaticPaused: undefined, notice: enabled ? "Automatic Expert AI enabled. Uncertain submissions still need manual review." : "Automatic Expert AI is off. Manual controls remain available." });
     });
   }
+  /**
+   * An automatic question whose outcome was lost (worker cut off, extension reloaded, failed
+   * fill). Ask its tab for proof instead of pausing: a prompt seen in the conversation was
+   * sent, so collect its answer; a prompt still unsent in the composer goes back to the queue.
+   * Without proof either way, pause and say what happened first.
+   */
+  private async settle(state: SessionState, active: ActiveQuestion): Promise<"collect" | "released" | "waiting"> {
+    active.cause ??= "An earlier attempt was cut off before it finished.";
+    let evidence: Evidence;
+    try { evidence = await this.ports.probe?.(active) ?? { verdict: "unknown", why: "No page check is available." }; }
+    catch (error) { evidence = { verdict: "unknown", why: errorMessage(error) }; }
+    if (evidence.verdict === "busy" && Date.now() - (active.startedAt ?? 0) <= 120_000) return "waiting";
+    if (evidence.verdict === "sent") {
+      active.phase = "asked";
+      active.startedAt = Date.now();
+      if (evidence.tabId !== undefined) active.tabId = evidence.tabId;
+      active.cause = undefined;
+      await this.ports.write({ ...state, active, managedTabId: active.tabId ?? state.managedTabId, notice: "The earlier question was found already sent. Collecting its answer…" });
+      // The app may still list it as queued; the answer is accepted either way.
+      await (await this.ports.api()).asked(active.item.id).catch(() => {});
+      return "collect";
+    }
+    if (evidence.verdict === "not-sent") {
+      await this.ports.write({ ...state, active: undefined, managedTabId: evidence.tabId ?? state.managedTabId, notice: "The earlier question was proven never sent. It is back in the queue and will be asked again." });
+      return "released";
+    }
+    if (active.phase === "starting") active.phase = "uncertain";
+    await this.ports.write({ ...state, active });
+    throw new Error(`The earlier submission is uncertain and its tab could not prove whether it was sent (${evidence.why}). What went wrong first: ${active.cause} Check its tab and return its answer manually or release the question; it will not be submitted again.`);
+  }
   /** Alarm-driven: every decision is recovered from storage after worker sleep. */
   async automaticTick() {
     if (this.busy) return;
@@ -189,11 +231,9 @@ export class ExtensionController {
           return;
         }
         if (active.phase !== "asked") {
-          if (active.phase === "starting") {
-            active.phase = "uncertain";
-            await this.ports.write({ ...state, active });
-          }
-          throw new Error("The earlier submission is uncertain. Check its tab and return its answer manually or release the question; it will not be submitted again.");
+          const outcome = await this.settle(state, active);
+          if (outcome === "released") { await this.askOne(undefined, true); return; }
+          if (outcome === "waiting") return;
         }
         const answer = await this.ports.collect?.(active);
         if (answer) await this.answerOne(answer, false, { tabId: active.tabId!, requestId: active.requestId });

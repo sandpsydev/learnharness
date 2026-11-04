@@ -11,6 +11,8 @@ export interface Highlight { text: string; url: string; title?: string }
 export interface ActiveQuestion {
   item: QueueItem; tabId?: number; requestId: string;
   automatic?: boolean; startedAt?: number;
+  /** First, specific reason the attempt stopped being clean. Kept so later generic notices cannot hide it. */
+  cause?: string;
   phase: "starting" | "asked" | "uncertain" | "manual";
 }
 export interface SessionState {

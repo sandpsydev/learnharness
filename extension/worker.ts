@@ -4,7 +4,7 @@ import { Attempts } from "./attempts";
 import { ExtensionController } from "./controller";
 import { errorMessage } from "./types";
 import type { ActiveQuestion, Config, QueueItem, Request, SessionState } from "./types";
-import type { PageResult } from "./controller";
+import type { Evidence, PageResult } from "./controller";
 
 const ready = Promise.all([
   chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }),
@@ -21,8 +21,15 @@ async function read(): Promise<SessionState> {
   // Session data clears on browser restart/reload. A durable guard prevents an
   // interrupted fill from becoming a new automatic submission of the same item.
   if (attempt && state.active?.requestId !== attempt.requestId) {
-    const reason = "An earlier question was interrupted or the browser restarted. Check Expert AI and return its answer manually, or deliberately release the question. It will not be submitted again.";
-    return { ...state, active: { ...attempt, phase: "uncertain", tabId: undefined }, automaticPaused: reason, notice: reason };
+    const cause = attempt.cause ?? "An earlier attempt was interrupted before it finished.";
+    if (attempt.automatic) {
+      // An extension reload or browser restart is not a reason to stay stuck: keep the tab
+      // as a place to look and let the next automatic check settle it from the page itself.
+      // A tab ID is only a lead; the page must show the prompt before anything is trusted.
+      return { ...state, active: { ...attempt, phase: "uncertain", cause }, notice: "Checking an earlier question after the extension restarted…" };
+    }
+    const reason = `An earlier question was interrupted or the browser restarted (${cause}) Check Expert AI and return its answer manually, or deliberately release the question. It will not be submitted again.`;
+    return { ...state, active: { ...attempt, phase: "uncertain", tabId: undefined, cause }, automaticPaused: reason, notice: reason };
   }
   return state;
 }
@@ -92,7 +99,26 @@ async function submit(tabId: number, item: QueueItem, requestId: string, automat
   if (!connected) return { ok: false, submitted: false, untouched: true, error: "The Expert AI tab is not ready. If it asks you to sign in, sign in there. Otherwise reload it or use manual paste-back." };
   return await chrome.tabs.sendMessage(tabId, { type: "lh-ask", prompt: item.prompt, requestId, automatic }, { frameId: 0 });
 }
-const controller = new ExtensionController({ api: async () => new VerifyApi(await config()), read, write, focusExpert, submit, clipboard,
+async function probe(active: ActiveQuestion): Promise<Evidence> {
+  const tabId = active.tabId;
+  if (tabId === undefined) return { verdict: "unknown", why: "No tab was recorded for it" };
+  let tab: chrome.tabs.Tab;
+  try { tab = await chrome.tabs.get(tabId); } catch { return { verdict: "unknown", why: "Its tab was closed" }; }
+  if (!isExpertUrl(tab.url ?? "")) return { verdict: "unknown", why: "Its tab is no longer on Expert AI" };
+  const ask = () => chrome.tabs.sendMessage(tabId, { type: "lh-probe", requestId: active.requestId, prompt: active.item.prompt }, { frameId: 0 });
+  let reply: { ok: boolean; verdict?: Evidence["verdict"]; why?: string; error?: string } | undefined;
+  try { reply = await ask(); }
+  catch {
+    // The tab was loaded before this extension version started, so it has no live script.
+    try {
+      await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["content.js"] });
+      reply = await ask();
+    } catch { return { verdict: "unknown", why: "Its tab could not be inspected" }; }
+  }
+  if (!reply?.ok || !reply.verdict) return { verdict: "unknown", why: reply?.error ?? "Its tab gave no answer" };
+  return { verdict: reply.verdict, why: reply.why ?? "", tabId };
+}
+const controller = new ExtensionController({ probe, api: async () => new VerifyApi(await config()), read, write, focusExpert, submit, clipboard,
   completed: async (active) => {
     if (active.tabId !== undefined) await chrome.tabs.sendMessage(active.tabId, { type: "lh-returned", requestId: active.requestId }, { frameId: 0 });
   },

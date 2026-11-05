@@ -26,7 +26,9 @@ opened or read the live site. Manual copy/paste remains available.
    personal data or patient identifiers.
 
 Rebuild and click **Reload** on the extension card after changing source code.
-Reload already-open Expert AI tabs to update their content scripts. No store
+Reload already-open Expert AI tabs to update their content scripts. An
+automatic question left over from before the reload is settled by the worker
+without that (see "When an attempt's outcome is lost"). No store
 upload or paid account/key is needed. Equivalent extension pages in Edge and
 Brave support loading unpacked extensions; Arc uses Chrome's extension UI.
 
@@ -52,12 +54,42 @@ Sign-in/access screens, open pop-ups, page failures, missing completion after
 two minutes, and answer-delivery failures pause automatic mode. If the app is
 closed before any question starts, only the local queue check retries on later
 alarms, so launching the app after Chrome needs no popup click. The toolbar
-shows **!**; open the popup for the plain-language reason. An untouched attempt
-leaves the app question queued and clears its local binding. The extension
-never signs in, dismisses a site pop-up, or resubmits an uncertain question.
-Fix the page or connection yourself, then open extension Settings and save with
-automatic mode on to resume. If filling/submission was uncertain, check the tab
-and use manual return or deliberately release the question first.
+shows **!**; open the popup for the plain-language reason. An attempt that
+never pressed Send, whether or not the prompt was already typed in, leaves the
+app question queued, clears the typed draft and the local binding, and pauses
+with the page's own reason (for example, that Send never became available while
+the managed tab was in the background). Nothing is left to release. The
+extension never signs in, dismisses a site pop-up, or resubmits a question that
+may have been sent. Fix the page or connection yourself, then open extension
+Settings and save with automatic mode on to resume.
+
+### When an attempt's outcome is lost
+
+A worker cut off mid-attempt, a browser restart or an extension reload can leave
+an automatic question whose outcome is unknown. The next automatic check looks
+at its managed tab instead of pausing straight away. If the tab was loaded
+before the extension reloaded, the worker adds its own `content.js` to that tab
+once, using the `scripting` permission on Expert AI pages only. The page then
+decides, from what it shows:
+
+- **Sent:** the prompt text appears in the conversation (outside the composer,
+  ignoring whitespace). The extension marks the question asked in the app,
+  collects the finished answer as usual and never submits again.
+- **Not sent:** the prompt is still in the start screen's composer and no
+  answer exists. The draft is cleared, the question goes back to the queue and
+  automatic asking continues, in the same tab. If the same page problem
+  repeats, that new attempt pauses cleanly as described above, so this cannot
+  loop.
+- **Neither can be proved** (tab closed or navigated away, an empty page, a page
+  that is still working): automation pauses as before. The popup keeps the first,
+  specific reason (for example, "Switch Expert AI to Standard") alongside the
+  note that the tab could not prove it, and saving settings does not replace it
+  with a generic message. Check the tab, then return the answer manually or
+  release the question. Saving settings with automatic mode on checks the tab
+  again.
+
+A question you took over manually (Copy prompt, manual Ask) is never probed or
+released automatically; after a restart it still pauses automation for review.
 
 Uncheck **Automatically ask queued Expert AI questions and return finished
 answers** in extension Settings and save to stop automatic work. Manual
@@ -106,8 +138,10 @@ mode back on resumes a pending completed answer without resubmitting it.
   IDs and recovery drafts survive worker sleep in browser session storage.
   Recovery drafts and tab IDs clear on browser restart, extension reload/update
   or disable, so save unsent evidence first. An active-question guard persists
-  locally: after losing session state, it restores the question as uncertain
-  with no trusted tab ID and pauses automation for manual review. This also
+  locally: after losing session state, it restores the question as uncertain.
+  A manual question pauses automation for review with no trusted tab ID. An
+  automatic one keeps its last tab ID only as a place to look; the page itself
+  must show the prompt before anything is trusted (see above). This also
   protects a submitted question whose app entry still says queued. Settings,
   token and the guard stay in this profile and do not sync through Chrome.
 - **Release current question** clears the local binding, return draft and pause.
@@ -150,6 +184,10 @@ The owner should check this first live automatic run:
    automatic mode on again to resume. A pending answer must not resubmit its prompt.
 7. If the tab fails after submission, confirm it pauses and never submits again.
    Check the tab and use manual return before releasing anything uncertain.
+8. After installing a new extension build over a stuck pause, reload the
+   extension and wait up to a minute without clicking anything. The leftover
+   question should be re-asked, or its answer collected, or (if the tab cannot
+   prove it) the pause should name the original reason.
 
 These live checks must be done by the owner; the implementation agent must
 never open, fetch, automate or read the live Expert AI site.

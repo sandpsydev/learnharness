@@ -1,4 +1,4 @@
-import { answerContainer, canSubmit, conversationIsFresh, fillQuestion, readAnswerWithSources, requireVisible, questionBox, startConversation, submitQuestion } from "./expert-page";
+import { answerContainer, canSubmit, clearDraft, conversationIsFresh, fillQuestion, promptEvidence, readAnswerWithSources, requireVisible, questionBox, startConversation, submitQuestion } from "./expert-page";
 import { errorMessage } from "./types";
 import type { Reply } from "./types";
 
@@ -69,9 +69,29 @@ async function waitUntil(check: () => boolean, ms = 10_000, automatic = false) {
   }
   throw new Error("Expert AI did not show the expected fresh conversation or submit control. Use manual paste-back.");
 }
-chrome.runtime.onMessage.addListener((message, sender, respond) => {
+/** Bind an already-sent automatic question found on the page, so its answer can be collected. */
+function adopt(requestId: string, prompt: string) {
+  if (pending?.requestId === requestId) return;
+  reset();
+  pending = { requestId, prompt, automatic: true };
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
+  attachControls();
+}
+function install() { chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return false;
   if (message?.type === "lh-ready") { respond({ ok: true }); return false; }
+  if (message?.type === "lh-probe") {
+    // The worker may inject this script into a tab it did not load with. Report what the
+    // page shows; an already-sent prompt is adopted so its answer can be collected.
+    if (running || typeof message.prompt !== "string" || typeof message.requestId !== "string") { respond({ ok: true, verdict: "busy", why: "The page is still working on this question." }); return false; }
+    try {
+      const evidence = promptEvidence(document, message.prompt);
+      if (evidence.verdict === "sent") adopt(message.requestId, message.prompt);
+      if (evidence.verdict === "not-sent") clearDraft(document);
+      respond({ ok: true, ...evidence });
+    } catch (error) { respond({ ok: false, error: errorMessage(error) }); }
+    return false;
+  }
   if (message?.type === "lh-returned") {
     if (pending?.requestId === message.requestId) reset();
     respond({ ok: true });
@@ -132,7 +152,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     }, 120_000);
     respond({ ok: true, submitted: true });
   })().catch((error) => {
-    const message = errorMessage(error);
+    // Nothing was clicked (`submitted` is set only just before the click), so a filled
+    // draft is only text in the composer. In the managed tab, remove it so a later attempt
+    // starts clean; a learner's own tab keeps it for them to finish by hand.
+    if (automatic && filling && !submitted) { try { clearDraft(document); } catch { /* Best effort. */ } }
+    const hidden = automatic && document.visibilityState !== "visible" ? " (The managed tab is in the background, where the page may not update.)" : "";
+    const message = errorMessage(error) + hidden;
     controls = document.createElement("aside");
     controls.setAttribute("role", "alert");
     controls.style.cssText = "padding:12px;border:2px solid #888;background:Canvas;color:CanvasText;font:14px system-ui";
@@ -141,5 +166,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     respond({ ok: false, submitted, untouched: !filling, error: message });
   }).finally(() => { running = false; });
   return true;
-});
-document.addEventListener("visibilitychange", attachControls);
+}); document.addEventListener("visibilitychange", attachControls); }
+// Injecting the script again (to inspect a tab loaded before the extension) must not add a second handler.
+const once = globalThis as { __lhMedicalContent?: boolean };
+if (!once.__lhMedicalContent) { once.__lhMedicalContent = true; install(); }

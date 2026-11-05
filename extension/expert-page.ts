@@ -132,6 +132,46 @@ export function conversationIsFresh(doc: Document): boolean {
   const box = questionBox(doc);
   return shown(box.closest(EXPERT_PAGE.initialScreen)) && box.getAttribute("data-empty") === "true" && !(box.textContent ?? "").trim();
 }
+/**
+ * What the page itself shows about whether a prompt was sent. Used to settle an
+ * attempt whose outcome was lost (worker restart, extension reload, failed fill).
+ * - `sent`: the prompt text appears somewhere outside the composer (the user's
+ *   turn, or a history title), so the conversation exists.
+ * - `not-sent`: the prompt is still sitting in the composer of the start screen
+ *   and no assistant answer exists, so Send was never pressed.
+ * Anything else is `unknown`; callers must then keep the no-resubmit guard.
+ */
+export type PromptEvidence = { verdict: "sent" | "not-sent" | "unknown"; why: string };
+const squash = (text: string | null | undefined) => (text ?? "").replace(/\s+/g, "");
+export function promptEvidence(doc: Document, prompt: string): PromptEvidence {
+  const wanted = squash(prompt);
+  if (!wanted) return { verdict: "unknown", why: "The queued prompt is empty." };
+  const rest = doc.body.cloneNode(true) as HTMLElement;
+  rest.querySelectorAll(`${EXPERT_PAGE.question}, script, style`).forEach((node) => node.remove());
+  if (squash(rest.textContent).includes(wanted)) return { verdict: "sent", why: "The prompt appears in the conversation on the page." };
+  const holding = [...doc.querySelectorAll<HTMLElement>(EXPERT_PAGE.question)].find((box) => squash(box.textContent).includes(wanted));
+  if (holding && shown(holding.closest(EXPERT_PAGE.initialScreen)) && !doc.querySelector(EXPERT_PAGE.answer)) {
+    return { verdict: "not-sent", why: "The prompt is still in the empty start screen's composer and no answer exists." };
+  }
+  return { verdict: "unknown", why: "The page shows neither a conversation holding the prompt nor the unsent prompt in the composer." };
+}
+/** Empty the composer of an unsent draft through the editor's own editing path. */
+export function clearDraft(doc: Document) {
+  const box = [...doc.querySelectorAll<HTMLElement>(EXPERT_PAGE.question)].find(enabled);
+  if (!box || !(box.textContent ?? "").trim()) return;
+  box.focus();
+  const selection = doc.getSelection?.();
+  if (selection && doc.execCommand) {
+    const range = doc.createRange();
+    range.selectNodeContents(box);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    if (doc.execCommand("delete", false) && !(box.textContent ?? "").trim()) return;
+  }
+  box.textContent = "";
+  const InputEventClass = doc.defaultView?.InputEvent ?? InputEvent;
+  box.dispatchEvent(new InputEventClass("input", { bubbles: true, inputType: "deleteContent" }));
+}
 export function canSubmit(doc: Document): boolean { return enabled(submitFor(questionBox(doc))); }
 
 function visibleSourcesPanel(doc: Document) {

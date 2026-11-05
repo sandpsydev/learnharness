@@ -10,4 +10,7 @@ export async function register() {
 	if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.NODE_ENV === "test") return;
 	const { startVerifyApi } = await import("./src/server/verify-api.ts");
 	await startVerifyApi();
+	// The Obsidian copy (medical fork): watches the graph and keeps the vault in step.
+	const { startObsidianSync } = await import("./src/server/obsidian.ts");
+	startObsidianSync();
 }

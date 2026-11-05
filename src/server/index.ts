@@ -9,6 +9,8 @@ export * from "./events-stream.ts";
 export * from "./chats.ts";
 export * from "./graph.ts";
 export * from "./graph-organizer.ts";
+export * from "./obsidian.ts";
+export * from "./review.ts";
 export * from "./anki.ts";
 export { NotesImportError } from "../agent/subagents/extraction.ts";
 export * from "./commit-positions.ts";

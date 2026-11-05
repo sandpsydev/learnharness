@@ -51,6 +51,7 @@ import { Hint } from "@/components/ui/hint";
 import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
 import { LibrarySection } from "./library-section.tsx";
+import { ObsidianSection } from "./obsidian-section.tsx";
 import { ChatGPTUIProvider } from "./chatgpt-connection.tsx";
 import { NativeSubscriptionUIProvider } from "./subscription-connections.tsx";
 
@@ -61,6 +62,7 @@ const SECTIONS = [
 	{ id: "keys", label: "Providers" },
 	{ id: "agent", label: "Agent" },
 	{ id: "library", label: "Library" },
+	{ id: "obsidian", label: "Obsidian" },
 	{ id: "appearance", label: "Appearance" },
 	{ id: "graph", label: "Graph" },
 	{ id: "keyboard", label: "Keyboard", hint: "Stored on this device" },
@@ -403,6 +405,14 @@ export function SettingsDialogBody({
 									testid="section-library"
 								>
 									<LibrarySection />
+								</SettingsSection>
+							)}
+							{active === "obsidian" && (
+								<SettingsSection
+									title="Obsidian"
+									testid="section-obsidian"
+								>
+									<ObsidianSection />
 								</SettingsSection>
 							)}
 							{active === "appearance" && (

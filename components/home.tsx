@@ -3,7 +3,7 @@
 import type { GraphContextPick } from "@/src/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
+import { BookOpenIcon, CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { MinimalHome } from "@/components/minimal-home";
 import { SetupDialog } from "@/components/setup-dialog";
@@ -17,6 +17,7 @@ import { OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
 import { PathInput } from "@/components/path-input";
 import { SessionStarter } from "@/components/start-session";
 import { TonightsQuestions } from "@/components/captures";
+import { ReviewPanel, useReview } from "@/components/review-panel";
 import type { TurnUsage } from "@/src/core";
 
 /**
@@ -93,7 +94,12 @@ export function Home({
 	 *  may carry proposition picks from the chain table (the chip above
 	 *  the composer opens the picker; the picks seed the opening prompt).
 	 *  Not enforcing any input format — the picks are a convenience. */
-	const [mode, setMode] = useState<"teach" | "practice">("teach");
+	const [mode, setMode] = useState<"teach" | "practice" | "review">("teach");
+	/* REVIEW MODE (medical fork): the third mode. The composer takes an
+	 * illness name instead of a topic, and sending it writes that illness's
+	 * script into Obsidian (components/review-panel.tsx) rather than
+	 * starting a session. */
+	const review = useReview(mode === "review");
 	const [practiceProps, setPracticeProps] = useState<GraphContextPick[]>([]);
 	const [chainSelectOpen, setChainSelectOpen] = useState(false);
 	// The chain table is CONTROLLED off this id set (the lifted pick).
@@ -114,6 +120,14 @@ export function Home({
 	const begin = async () => {
 		const t = topicRef.current.trim();
 		if (!t || startingRef.current) return;
+		// Review: no session — ask for the script and keep the learner here.
+		if (mode === "review") {
+			if (await review.write(t)) {
+				topicRef.current = "";
+				setTopic("");
+			}
+			return;
+		}
 		// Unconfigured: the send INTERCEPTS into the setup flow (the draft
 		// stays in the textarea; the learner sends it after Save).
 		if (!configured) {
@@ -220,6 +234,7 @@ export function Home({
 					    send consumes it). Practice mode with nothing picked
 					    shows the pick HINT so the affordance is discoverable;
 					    teaching mode with nothing picked renders nothing. */}
+					{mode === "review" ? <ReviewPanel review={review} /> : null}
 					<TonightsQuestions />
 					<ComposerActions
 						picker={(practiceProps.length > 0 || mode === "practice") && (
@@ -275,7 +290,13 @@ export function Home({
 								void start();
 							}
 						}}
-						placeholder={mode === "practice" ? "What do you want to practice?" : "What do you want to learn?"}
+						placeholder={
+							mode === "practice"
+								? "What do you want to practice?"
+								: mode === "review"
+									? "Which illness? For example: acute pancreatitis"
+									: "What do you want to learn?"
+						}
 						autoFocus
 						className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
 					/>
@@ -283,8 +304,8 @@ export function Home({
 					    affordance (owner, subtlety round 2026-09-25). */}
 					<button
 						type="submit"
-						aria-label="Start session"
-						disabled={(!topic.trim() && !dictation.active) || busy}
+						aria-label={mode === "review" ? "Write illness script" : "Start session"}
+						disabled={(!topic.trim() && !dictation.active) || busy || (mode === "review" && review.busy)}
 						className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-primary text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-40"
 					>
 						<CornerDownLeftIcon className="size-5" />
@@ -299,7 +320,7 @@ export function Home({
 						turns={[] as TurnUsage[]}
 						leadingSlot={
 							<div className="flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5" data-testid="home-mode-switch">
-								{(["teach", "practice"] as const).map((m) => (
+								{(["teach", "practice", "review"] as const).map((m) => (
 									<button
 										key={m}
 										type="button"
@@ -313,7 +334,8 @@ export function Home({
 										}
 									>
 										{m === "practice" ? <DumbbellIcon aria-hidden="true" className="size-3" /> : null}
-										{m === "teach" ? "Teach" : "Practice"}
+										{m === "review" ? <BookOpenIcon aria-hidden="true" className="size-3" /> : null}
+										{m === "teach" ? "Teach" : m === "practice" ? "Practice" : "Review"}
 									</button>
 								))}
 							</div>

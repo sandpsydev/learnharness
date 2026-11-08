@@ -78,6 +78,7 @@ import {
 	dismissedAnswer,
 	endsInFailedTurn,
 	findPendingToolCall,
+	questionPartShownInTranscript,
 	phaseAt3,
 	phaseTimeline,
 	teachStepIndex,
@@ -1595,7 +1596,7 @@ export function Chat({
 													case "tool-recall": {
 														// Pending/streaming questions live in the dock, not the
 														// transcript; answered ones render as graded records.
-														if (part.state === "output-available") {
+														if (questionPartShownInTranscript(part.state)) {
 															return (
 																<AnsweredCard key={pi} answer={part.output as QuestionAnswerData} input={part.input} />
 															);

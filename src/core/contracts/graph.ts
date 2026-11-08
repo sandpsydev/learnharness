@@ -149,12 +149,16 @@ export const ORGAN_SYSTEMS = [
 	{ id: "general", label: "General principles" },
 ] as const;
 
-/** The 5 fact types (spec Phase 4). A node carries exactly one. */
+/** The 6 fact types (spec Phase 4, plus pharmacology). A node carries exactly
+ *  one. `pharmacology` is for facts ABOUT A DRUG (its class, mechanism of
+ *  action, indications, adverse effects, interactions); which treatment to
+ *  choose for a disease stays `management`. */
 export const FACT_TYPES = [
 	{ id: "mechanism", label: "Mechanism" },
 	{ id: "clinical-feature", label: "Clinical feature" },
 	{ id: "diagnosis", label: "Diagnosis/investigation" },
 	{ id: "management", label: "Management" },
+	{ id: "pharmacology", label: "Pharmacology" },
 	{ id: "memorise", label: "Memorise" },
 ] as const;
 
@@ -252,6 +256,11 @@ export interface GraphNode {
 	 *  and back-fill lines never override it. Edits are appended, so no
 	 *  existing ledger line is ever rewritten. */
 	tagsEdited?: boolean;
+	/** Stored on a node LINE only: this line upgrades the fact type to
+	 *  `pharmacology` over an earlier extraction/back-fill value (the one-time
+	 *  drug back-fill — src/server/pharmacology-backfill.ts). It never
+	 *  overrides a learner edit, and no other value is ever upgraded this way. */
+	factTypeUpgrade?: boolean;
 }
 
 /** sessions.jsonl line — the emission checkpoint for one chat (which chats

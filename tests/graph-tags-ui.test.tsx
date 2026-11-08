@@ -181,7 +181,7 @@ describe("NodeTagsEditor", () => {
 		assert.ok(html.includes("Untagged."));
 	});
 
-	it("editing lists all 13 systems and 5 fact types, pre-selected from the node, with Save", () => {
+	it("editing lists all 13 systems and 6 fact types, pre-selected from the node, with Save", () => {
 		const html = renderToStaticMarkup(
 			createElement(NodeTagsEditor, {
 				nodeId: "n_1",
@@ -192,7 +192,7 @@ describe("NodeTagsEditor", () => {
 			}),
 		);
 		assert.equal(html.match(/data-testid="node-tag-system-/g)?.length, 13);
-		assert.equal(html.match(/data-testid="node-tag-type-/g)?.length, 5);
+		assert.equal(html.match(/data-testid="node-tag-type-/g)?.length, 6);
 		assert.ok(/aria-pressed="true"[^>]*data-testid="node-tag-system-renal"/.test(html));
 		assert.ok(/aria-pressed="true"[^>]*data-testid="node-tag-type-mechanism"/.test(html));
 		assert.ok(/aria-pressed="false"[^>]*data-testid="node-tag-system-gi"/.test(html));

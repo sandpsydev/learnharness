@@ -105,6 +105,9 @@ export const ORGANIZER_HISTORY_FILE = path.join(PATHS.graph, "organizer-history.
 export const PLACEMENTS_FILE = path.join(PATHS.graph, "placements.jsonl");
 /** The placer's run journal: one small JSON list, so a run can be reverted. */
 export const PLACER_JOURNAL_FILE = path.join(PATHS.graph, "placer-runs.json");
+/** The one-time drug back-fill's progress (medical fork): which facts have been
+ *  looked at, and when it finished. A small JSON file, so the pass is resumable. */
+export const PHARMACOLOGY_BACKFILL_FILE = path.join(PATHS.graph, "pharmacology-backfill.json");
 export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
 
 /**

@@ -65,6 +65,13 @@ export function toolQuestionKind(tool: string): "quiz" | "ask" | "explain" {
 	return tool === "quiz" || tool === "probe" ? "quiz" : tool === "explain" || tool === "recall" ? "explain" : "ask";
 }
 
+/** The transcript renders a question part only once it is ANSWERED (as a
+ *  graded record). A pending or streaming question lives in the dock, which
+ *  shows exactly one question — the first unanswered — so a check set (several
+ *  question calls in one turn) is displayed strictly one question at a time on
+ *  every screen size: the next appears only after the previous is answered. */
+export const questionPartShownInTranscript = (state: unknown): boolean => state === "output-available";
+
 /** Tools fulfilled by background sub-agent jobs (W2/W6). */
 export const JOB_TOOLS = ["research", "demo", "visual"] as const;
 

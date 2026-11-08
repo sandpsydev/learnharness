@@ -85,6 +85,21 @@ import {
 	setOutlineSelection,
 	useOutlineSelection,
 } from "@/components/graph-outline.tsx";
+import {
+	buildClusterView,
+	displayIdsFor,
+	factBreadcrumb,
+	focusNeighbourhood,
+	isTopicNodeId,
+	layoutClusterView,
+	parseRecents,
+	pushRecent,
+	resolveRecents,
+	topicKeyOf,
+	topicNodeId,
+	UNPLACED_KEY,
+} from "@/components/graph-navigation.ts";
+import { FactBreadcrumb, FocusChip, type GraphViewMode } from "@/components/graph-trail.tsx";
 import { AnkiDialog } from "@/components/anki-dialog";
 import { Hint } from "@/components/ui/hint";
 import {
@@ -135,6 +150,37 @@ const NODE_COLOR_TOKEN = "--primary";
 /** Per-device graph camera persistence (zoom+pan view state). v1 in the
  *  key: the stored shape is the renderer's d3 transform {k, x, y}. */
 const CAMERA_STORAGE_KEY = "lh.graph.camera.v1";
+/** Per-viewer navigation state (medical fork): how the graph is drawn, and
+ *  the recently visited facts. Best-effort localStorage, like the camera. */
+const VIEW_MODE_STORAGE_KEY = "lh.graph.viewMode.v1";
+const RECENTS_STORAGE_KEY = "lh.graph.recentFacts.v1";
+
+function readViewMode(): GraphViewMode {
+	try {
+		return localStorage.getItem(VIEW_MODE_STORAGE_KEY) === "all" ? "all" : "topics";
+	} catch {
+		return "topics";
+	}
+}
+
+function readRecents(): string[] {
+	try {
+		return parseRecents(localStorage.getItem(RECENTS_STORAGE_KEY));
+	} catch {
+		return [];
+	}
+}
+
+/** What to do to the camera once the next data feed has landed (a topic just
+ *  opened, the view switched, a fact revealed from elsewhere). */
+type PendingFrame =
+	| { kind: "fit" }
+	| { kind: "facts"; ids: string[]; openCard?: string };
+
+/** How close (× the whole-picture framing) the bubble view zooms when it frames a topic or a fact. */
+const BUBBLE_FRAME_FIT = 2;
+
+const isPhoneWidth = () => typeof window !== "undefined" && window.matchMedia("(max-width: 639px)").matches;
 
 // ---- Render settings (the settings-panel controls) ------------------------
 //
@@ -1141,12 +1187,141 @@ export function GraphView({
 		return set;
 	}, [snapshot, query, tagFilter, tagFilterOn, outlineSelection]);
 
+	// ---- Finding your way around (medical fork) -----------------------------
+	// Topic bubbles: by default the graph is one bubble per topic, grouped under
+	// its organ system; opening a bubble shows its facts. "All facts" is the
+	// original graph. Focus mode fades everything but a clicked fact and its
+	// direct neighbours. Recents remember the facts the learner opened.
+	const [viewMode, setViewModeState] = useState<GraphViewMode>(readViewMode);
+	const [openTopics, setOpenTopics] = useState<ReadonlySet<string>>(() => new Set());
+	const [focusId, setFocusId] = useState<string | null>(null);
+	const [recents, setRecents] = useState<string[]>(readRecents);
+	const recentsRef = useRef(recents);
+	recentsRef.current = recents;
+	const pendingRef = useRef<PendingFrame | null>(null);
+	// The renderer's click callback is built once; it calls through this ref.
+	const nodeClickRef = useRef<((nodeId: string, pos: { x: number; y: number }) => void) | null>(null);
+	const revealCardRef = useRef<((nodeId: string) => void) | null>(null);
+	const openTopicsRef = useRef(openTopics);
+	openTopicsRef.current = openTopics;
+	const bubbles = viewMode === "topics" && snapshot?.placement !== undefined;
+	const bubblesRef = useRef(bubbles);
+	bubblesRef.current = bubbles;
+	const filtersOn = query.trim() !== "" || tagFilterOn || outlineOn;
+	// The whole picture (layout comes from here, so typing in the search never
+	// shuffles the bubbles) and the part the filters leave.
+	const clusterFull = useMemo(
+		() =>
+			bubbles && snapshot
+				? buildClusterView({
+						nodes: snapshot.propositions,
+						placement: snapshot.placement,
+						edges: snapshot.edges,
+						impLinks: snapshot.impLinks,
+						expanded: openTopics,
+					})
+				: null,
+		[bubbles, snapshot, openTopics],
+	);
+	const clusterLayout = useMemo(() => (clusterFull ? layoutClusterView(clusterFull) : null), [clusterFull]);
+	const clusterShown = useMemo(
+		() =>
+			clusterFull && snapshot && filtersOn
+				? buildClusterView({
+						nodes: snapshot.propositions,
+						placement: snapshot.placement,
+						edges: snapshot.edges,
+						impLinks: snapshot.impLinks,
+						expanded: openTopics,
+						visibleIds,
+					})
+				: clusterFull,
+		[clusterFull, snapshot, filtersOn, openTopics, visibleIds],
+	);
+	const clusterShownRef = useRef(clusterShown);
+	clusterShownRef.current = clusterShown;
+
+	// The focus set, in display ids: the fact's neighbourhood, each neighbour
+	// standing for itself (or for its closed topic's bubble).
+	const focusSet = useMemo(() => {
+		if (!focusId || !snapshot) return null;
+		const hood = focusNeighbourhood(focusId, snapshot.edges, snapshot.impLinks);
+		if (!clusterShown) return hood;
+		const keptImps = new Set(clusterShown.impLinks.map((l) => l.id));
+		const out = new Set<string>();
+		for (const id of hood) {
+			const shown = clusterShown.displayOf.get(id);
+			if (shown !== undefined) out.add(shown);
+			else if (keptImps.has(id)) out.add(id);
+		}
+		return out;
+	}, [focusId, snapshot, clusterShown]);
+	// Focus cannot outlive its fact: deleted, hidden by a filter, or folded
+	// into a closed topic.
+	useEffect(() => {
+		if (!focusId || !snapshot) return;
+		const hidden = !visibleIds.has(focusId) && filtersOn;
+		const folded = clusterShown !== null && clusterShown.displayOf.get(focusId) !== focusId;
+		const gone = !snapshot.propositions.some((n) => n.id === focusId);
+		if (hidden || folded || gone) setFocusId(null);
+	}, [focusId, snapshot, visibleIds, filtersOn, clusterShown]);
+	// Esc leaves focus mode (not while typing, not under the chain table).
+	const chainsOpenRef = useRef(false);
+	useEffect(() => {
+		if (!focusId) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape" || chainsOpenRef.current) return;
+			const el = e.target instanceof HTMLElement ? e.target : null;
+			if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+			setFocusId(null);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [focusId]);
+
+	const visitFact = (nodeId: string) => {
+		const next = pushRecent(recentsRef.current, nodeId);
+		recentsRef.current = next;
+		setRecents(next);
+		try {
+			localStorage.setItem(RECENTS_STORAGE_KEY, JSON.stringify(next));
+		} catch {
+			// best-effort
+		}
+	};
+	const changeViewMode = (mode: GraphViewMode) => {
+		if (mode === viewMode) return;
+		try {
+			localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+		} catch {
+			// best-effort
+		}
+		pendingRef.current = { kind: "fit" };
+		setViewModeState(mode);
+	};
+	const toggleTopic = (key: string) => {
+		const opening = !openTopics.has(key);
+		if (opening) {
+			const ids = clusterFull?.topics.find((t) => t.key === key)?.facts ?? [];
+			pendingRef.current = { kind: "facts", ids };
+		}
+		setOpenTopics((cur) => {
+			const next = new Set(cur);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
+	};
+	const focusNode = focusId ? snapshot?.propositions.find((n) => n.id === focusId) : undefined;
+	const recentNodes = useMemo(() => resolveRecents(recents, snapshot?.propositions ?? []), [recents, snapshot]);
+
 	// Fetch the derived graph. Re-runs when a background pipeline run
 	// finishes (refreshTick) — its merges just landed in the ledger.
 	const [refreshTick, setRefreshTick] = useState(0);
 	// The chain table overlay (chains-overlay plan, 2026-09-29) —
 	// component-local: a browsing surface, not graph state.
 	const [chainsOpen, setChainsOpen] = useState(false);
+	chainsOpenRef.current = chainsOpen;
 	// PRACTICE SELECT (2026-10-04): the parent's chip drives the select
 	// mode; closing (either the picker's confirm or its X) reports back so
 	// the chip's open state and the table's never disagree.
@@ -1383,7 +1558,8 @@ export function GraphView({
 		// corrupt → undefined → the renderer fits on first open, ever.
 		let initialCamera: { k: number; x: number; y: number } | null = null;
 		try {
-			const stored = localStorage.getItem(CAMERA_STORAGE_KEY);
+			// The saved camera frames the original layout; the bubble view fits itself.
+			const stored = bubblesRef.current ? null : localStorage.getItem(CAMERA_STORAGE_KEY);
 			if (stored) {
 				const parsed = JSON.parse(stored) as { k?: unknown; x?: unknown; y?: unknown };
 				if (
@@ -1401,6 +1577,7 @@ export function GraphView({
 		let cameraTimer: ReturnType<typeof setTimeout> | null = null;
 		let lastCamera: { k: number; x: number; y: number } | null = null;
 		const persistCamera = (t: { k: number; x: number; y: number }) => {
+			if (bubblesRef.current) return; // the bubble view's camera is not remembered
 			lastCamera = t;
 			if (cameraTimer) clearTimeout(cameraTimer);
 			cameraTimer = setTimeout(() => {
@@ -1415,16 +1592,7 @@ export function GraphView({
 		const renderer = new GraphCanvasRenderer(
 			canvas,
 			{
-				onSelect: (nodeId, pos) => {
-					const snap = snapshotRef.current;
-					const node = snap?.nodes.find((n) => n.id === nodeId);
-					if (!snap || !node) return;
-					setSelected({
-						node,
-						sourceIds: snap.nodeSessions[node.id] ?? [],
-						anchor: pos,
-					});
-				},
+				onSelect: (nodeId, pos) => nodeClickRef.current?.(nodeId, pos),
 				onStageClick: () => setSelected(null),
 				// Right-click → the node context menu (node interlude). Null
 				// (empty stage) closes a stale menu; a pick opens one anchored
@@ -1481,31 +1649,84 @@ export function GraphView({
 	// Feed #1 — data: positions + edges + clusters + resolved colors. Runs
 	// after the layout effect (same commit, declaration order) and after
 	// the construct effect, so the renderer exists and positions are fresh.
+	// In the bubble view the data is the topic picture instead (positions from
+	// layoutClusterView; a fixed layout, no live physics).
 	useEffect(() => {
 		const renderer = rendererRef.current;
 		const positions = posRef.current;
-		if (!renderer || !snapshot || snapshot.nodes.length === 0 || !positions) return;
-		renderer.setData({
-			nodes: snapshot.nodes.map((n) => ({
-				id: n.id,
-				x: positions.get(n.id)?.x ?? 0,
-				y: positions.get(n.id)?.y ?? 0,
-				label: n.name,
-			})),
-			edges: snapshot.edges.map((e) => ({ from: e.from, to: e.to })),
-			logicalEdges: snapshot.logicalEdges.map((e) => ({ from: e.from, to: e.to })),
-			impLinks: snapshot.impLinks,
-			clusters: snapshot.clusters.map((c) => ({ id: c.id, label: c.label, members: c.members })),
-			colors: {
-				node: tokenHex(NODE_COLOR_TOKEN),
-				edge: tokenHex("--ring"),
-				label: tokenHex("--muted-foreground"),
-				hoverText: tokenHex("--foreground"),
-			},
-			// Match the app typography (Geist via the body's stack).
-			fontFamily: getComputedStyle(document.body).fontFamily,
-		});
-	}, [snapshot, isEmpty]);
+		if (!renderer || !snapshot || snapshot.nodes.length === 0) return;
+		const colors = {
+			node: tokenHex(NODE_COLOR_TOKEN),
+			edge: tokenHex("--ring"),
+			label: tokenHex("--muted-foreground"),
+			hoverText: tokenHex("--foreground"),
+		};
+		// Match the app typography (Geist via the body's stack).
+		const fontFamily = getComputedStyle(document.body).fontFamily;
+		if (clusterShown && clusterLayout) {
+			const nameOf = new Map(snapshot.propositions.map((n) => [n.id, n.name]));
+			const at = (id: string) => clusterLayout.positions.get(id) ?? { x: 0, y: 0 };
+			const topicByNode = new Map(clusterShown.topics.map((t) => [topicNodeId(t.key), t]));
+			renderer.setData({
+				nodes: clusterShown.nodeIds.map(({ id, kind }) => {
+					const p = at(id);
+					if (kind === "topic") {
+						const t = topicByNode.get(id)!;
+						return { id, x: p.x, y: p.y, label: t.name, kind: "topic" as const, radius: clusterLayout.radius.get(id) ?? 8, count: t.facts.length, open: t.expanded };
+					}
+					return { id, x: p.x, y: p.y, label: kind === "imp" ? "" : (nameOf.get(id) ?? "") };
+				}),
+				edges: clusterShown.edges,
+				impLinks: clusterShown.impLinks,
+				// The system groups are drawn as frames, not as hulls.
+				clusters: [],
+				frames: clusterShown.groups.flatMap((g) => {
+					const f = clusterLayout.frames.get(g.id);
+					return f && g.id !== `system:${UNPLACED_KEY}` ? [{ id: g.id, label: g.label, x: f.x, y: f.y, r: f.r }] : [];
+				}),
+				colors,
+				fontFamily,
+				staticLayout: true,
+				bounds: clusterLayout.bounds,
+			});
+		} else if (positions) {
+			renderer.setData({
+				nodes: snapshot.nodes.map((n) => ({
+					id: n.id,
+					x: positions.get(n.id)?.x ?? 0,
+					y: positions.get(n.id)?.y ?? 0,
+					label: n.name,
+				})),
+				edges: snapshot.edges.map((e) => ({ from: e.from, to: e.to })),
+				logicalEdges: snapshot.logicalEdges.map((e) => ({ from: e.from, to: e.to })),
+				impLinks: snapshot.impLinks,
+				clusters: snapshot.clusters.map((c) => ({ id: c.id, label: c.label, members: c.members })),
+				colors,
+				fontFamily,
+			});
+		} else {
+			return;
+		}
+		// A topic just opened, the view just switched, or a fact was revealed
+		// from elsewhere: now that the new picture is in, move the camera.
+		const pending = pendingRef.current;
+		if (pending) {
+			pendingRef.current = null;
+			if (pending.kind === "fit") renderer.fit();
+			else {
+				const ids = new Set(clusterShown ? displayIdsFor(clusterShown, pending.ids) : pending.ids);
+				if (clusterShown && !pending.openCard) {
+					// A topic header belongs to the picture of its own facts.
+					for (const id of pending.ids) {
+						const key = clusterShown.topicOf.get(id);
+						if (key !== undefined) ids.add(topicNodeId(key));
+					}
+				}
+				renderer.focusOn(ids, clusterShown ? BUBBLE_FRAME_FIT : undefined);
+				if (pending.openCard) revealCardRef.current?.(pending.openCard);
+			}
+		}
+	}, [snapshot, isEmpty, clusterShown, clusterLayout]);
 
 	// Feed #2 — settings: just marks the frame dirty. No rebuild, no
 	// re-layout, no camera touch (the whole point of the new renderer).
@@ -1517,19 +1738,33 @@ export function GraphView({
 	// Feed #3 — visibility: hidden nodes drop out of rendering, picking,
 	// hover, AND labels; edges drop when either endpoint is hidden.
 	useEffect(() => {
-		rendererRef.current?.setVisible(query.trim() || tagFilterOn || outlineOn ? visibleIds : null);
+		// The bubble view draws only what the filters leave (it is rebuilt, not masked).
+		rendererRef.current?.setVisible(!bubbles && (query.trim() || tagFilterOn || outlineOn) ? visibleIds : null);
 		// The open detail card cannot outlive its node's visibility.
 		setSelected((sel) => (sel && visibleIds.has(sel.node.id) ? sel : null));
-	}, [visibleIds, query, tagFilterOn, outlineOn]);
+	}, [visibleIds, query, tagFilterOn, outlineOn, bubbles]);
 
-	// Choosing an outline branch frames its facts. Keyed on the selection alone,
-	// so a snapshot refetch never yanks the camera.
+	// Focus mode: fade all but the focused fact's neighbourhood.
+	useEffect(() => {
+		rendererRef.current?.setFocus(focusSet);
+	}, [focusSet, isEmpty]);
+
+	// Choosing an outline branch frames its facts — and, in the bubble view,
+	// opens the topic it names. Keyed on the selection alone, so a snapshot
+	// refetch never yanks the camera.
 	useEffect(() => {
 		if (!outlineSelection) return;
 		const snap = snapshotRef.current;
 		if (!snap) return;
 		const ids = outlineVisibleIds(snap.propositions, [], snap.placement, outlineSelection);
-		rendererRef.current?.focusOn(ids);
+		const key = outlineSelection.topicId;
+		if (bubblesRef.current && key !== undefined && !openTopicsRef.current.has(key)) {
+			pendingRef.current = { kind: "facts", ids: [...ids] };
+			setOpenTopics((cur) => new Set(cur).add(key));
+			return;
+		}
+		const view = clusterShownRef.current;
+		rendererRef.current?.focusOn(view ? displayIdsFor(view, ids) : ids, view ? BUBBLE_FRAME_FIT : undefined);
 	}, [outlineSelection]);
 
 	// Placement is automatic and runs in the background: while facts wait for a
@@ -1548,25 +1783,65 @@ export function GraphView({
 		return () => clearInterval(timer);
 	}, [unplacedCount]);
 
-	// Open a fact from the outline: frame it and show its card, as a click on its node does.
-	const openFact = (nodeId: string) => {
+	// Show a fact's card and put the graph in focus on it: what a click on its
+	// node does. The card is anchored where the node was clicked, or centred.
+	const showFactCard = (nodeId: string, anchor?: { x: number; y: number }) => {
 		const snap = snapshotRef.current;
 		const node = snap?.nodes.find((n) => n.id === nodeId);
 		if (!snap || !node) return;
-		// Another filter would hide it (and close the card at once): lift those.
-		if (!visibleIds.has(nodeId)) {
-			setTagFilter(EMPTY_TAG_FILTER);
-			setQuery("");
-		}
-		rendererRef.current?.focusOn(new Set([nodeId]));
 		const box = containerRef.current;
 		setSelected({
 			node,
 			sourceIds: snap.nodeSessions[node.id] ?? [],
-			anchor: { x: (box?.clientWidth ?? 0) / 2, y: (box?.clientHeight ?? 0) / 2 },
+			anchor: anchor ?? { x: (box?.clientWidth ?? 0) / 2, y: (box?.clientHeight ?? 0) / 2 },
 		});
+		setFocusId(nodeId);
+		visitFact(nodeId);
 		// On a phone the sheet would cover the card.
-		if (typeof window !== "undefined" && window.matchMedia("(max-width: 639px)").matches) setOutlineOpen(false);
+		if (isPhoneWidth()) setOutlineOpen(false);
+	};
+	revealCardRef.current = (nodeId) => showFactCard(nodeId);
+	nodeClickRef.current = (nodeId, pos) => {
+		// A bubble opens (its facts appear in place); an open topic's header closes it.
+		if (isTopicNodeId(nodeId)) {
+			setSelected(null);
+			toggleTopic(topicKeyOf(nodeId));
+			return;
+		}
+		showFactCard(nodeId, pos);
+	};
+
+	// Open a fact from the outline or the recents: frame it and show its card,
+	// as a click on its node does.
+	const openFact = (nodeId: string) => {
+		const snap = snapshotRef.current;
+		if (!snap || !snap.nodes.some((n) => n.id === nodeId)) return;
+		// Another filter would hide it (and close the card at once): lift those.
+		const lifted = !visibleIds.has(nodeId);
+		if (lifted) {
+			setTagFilter(EMPTY_TAG_FILTER);
+			setQuery("");
+			setOutlineSelection(null);
+		}
+		// In the bubble view the fact may sit inside a closed topic, or the
+		// filters just lifted must land first: frame it once the picture is in.
+		const key = clusterFull?.topicOf.get(nodeId);
+		const needsOpen = bubbles && key !== undefined && !openTopics.has(key);
+		if (bubbles && (needsOpen || lifted)) {
+			pendingRef.current = { kind: "facts", ids: [nodeId], openCard: nodeId };
+			if (needsOpen) setOpenTopics((cur) => new Set(cur).add(key!));
+			return;
+		}
+		rendererRef.current?.focusOn(
+			clusterShown ? displayIdsFor(clusterShown, [nodeId]) : new Set([nodeId]),
+			clusterShown ? BUBBLE_FRAME_FIT : undefined,
+		);
+		showFactCard(nodeId);
+	};
+	// A breadcrumb part: jump to that branch of the outline (and the graph).
+	const jumpToBranch = (selection: Parameters<typeof setOutlineSelection>[0]) => {
+		setOutlineSelection(selection);
+		setOutlineOpen(true);
 	};
 
 	// Feed #4 — region tuning. `isEmpty` in the deps (same as Feed #2):
@@ -1750,6 +2025,7 @@ export function GraphView({
 				/>
 			</div>
 
+			{focusId && focusNode && <FocusChip name={focusNode.name} onExit={() => setFocusId(null)} />}
 			<NotesImportErrors errors={notesImport.errors} />
 			{/* Top-right tail (owner, 2026-09-20): the pipeline cost number —
 			    just a number, hover-highlighted, dropdown breakdown — then
@@ -1784,6 +2060,9 @@ export function GraphView({
 				>
 					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
 					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
+					{snapshot?.placement && (
+						<FactBreadcrumb parts={factBreadcrumb(selected.node.id, snapshot.placement)} onJump={jumpToBranch} />
+					)}
 					<NodeTagsEditor
 						// Re-key per node: a different card starts from its own tags.
 						key={selected.node.id}
@@ -1852,6 +2131,13 @@ export function GraphView({
 					onSelect={setOutlineSelection}
 					onClear={() => setOutlineSelection(null)}
 					onOpenFact={openFact}
+					view={
+						snapshot?.placement
+							? { mode: viewMode, onMode: changeViewMode, openTopics: openTopics.size, onCollapseAll: () => setOpenTopics(new Set()) }
+							: undefined
+					}
+					recents={recentNodes}
+					currentId={selected?.node.id ?? focusId}
 					onClose={() => setOutlineOpen(false)}
 					onChanged={(graphRevision) =>
 						window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { graphRevision } }))

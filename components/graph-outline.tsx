@@ -32,6 +32,7 @@ import {
 	type PlacerRun,
 } from "@/src/core";
 import { Hint } from "@/components/ui/hint";
+import { RecentFacts, ViewModeToggle, type GraphViewMode } from "@/components/graph-trail.tsx";
 
 // ---- The selection (shared store) -------------------------------------------
 
@@ -441,6 +442,9 @@ export function GraphOutlinePanel({
 	onClose,
 	onChanged,
 	initialOpen,
+	view,
+	recents,
+	currentId,
 }: {
 	/** The stored propositions (no derived implication nodes). */
 	nodes: ReadonlyArray<GraphNode>;
@@ -454,6 +458,12 @@ export function GraphOutlinePanel({
 	onChanged: (graphRevision: number) => void;
 	/** Branch keys open at the start (tests, and restoring a selection). */
 	initialOpen?: ReadonlySet<string>;
+	/** How the graph is drawn (topic bubbles / all facts) — the switch shows when supplied. */
+	view?: { mode: GraphViewMode; onMode: (mode: GraphViewMode) => void; openTopics: number; onCollapseAll: () => void };
+	/** Recently visited facts, newest first. */
+	recents?: ReadonlyArray<GraphNode>;
+	/** The fact whose card is open, if any. */
+	currentId?: string | null;
 }) {
 	const [query, setQuery] = useState("");
 	const [open, setOpen] = useState<ReadonlySet<string>>(initialOpen ?? new Set());
@@ -535,6 +545,7 @@ export function GraphOutlinePanel({
 					<XIcon className="size-4" />
 				</button>
 			</div>
+			{view && <ViewModeToggle {...view} />}
 			{selection && (
 				<div className="mb-2 flex items-center gap-1.5 rounded-lg bg-accent/60 px-2 py-1 text-[11px]">
 					<span className="text-muted-foreground">Showing</span>
@@ -547,6 +558,7 @@ export function GraphOutlinePanel({
 				</div>
 			)}
 			<div className="min-h-0 flex-1 overflow-y-auto">
+				{!searching && recents && <RecentFacts facts={recents} currentId={currentId} onOpen={onOpenFact} />}
 				<OutlineTreeView
 					tree={tree}
 					selection={selection}

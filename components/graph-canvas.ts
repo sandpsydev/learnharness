@@ -83,6 +83,13 @@ export interface CanvasNode {
 	x: number;
 	y: number;
 	label: string;
+	/** "topic": a topic marker of the bubble view (medical fork). Closed, it is
+	 *  a bubble of `radius` centred on x,y with `count` inside; open, x,y is the
+	 *  header pill at the top of a ring of `radius` whose centre is radius below. */
+	kind?: "topic";
+	radius?: number;
+	count?: number;
+	open?: boolean;
 }
 
 /** One directed edge of the DERIVED view (chains-primary, 2026-09-30):
@@ -95,6 +102,8 @@ export interface CanvasNode {
 export interface CanvasEdge {
 	from: string;
 	to: string;
+	/** Edges merged into this one (bubble view); drawn heavier when above 1. */
+	count?: number;
 }
 
 /** Implication-node ids (the mint law: newGraphChainId in core/graph.ts).
@@ -119,6 +128,15 @@ export interface CanvasColors {
 	hoverText: string;
 }
 
+/** A labelled circle drawn behind a group of nodes (the bubble view's organ-system frames). */
+export interface CanvasFrame {
+	id: string;
+	label: string;
+	x: number;
+	y: number;
+	r: number;
+}
+
 export interface CanvasData {
 	nodes: CanvasNode[];
 	edges: CanvasEdge[];
@@ -134,6 +152,14 @@ export interface CanvasData {
 	colors: CanvasColors;
 	/** Body font family (labels must match the app typography). */
 	fontFamily: string;
+	/** A fixed layout (the bubble view): no live physics, nothing drags. */
+	staticLayout?: boolean;
+	/** Group frames behind the nodes, labelled at a constant on-screen size. */
+	frames?: CanvasFrame[];
+	/** The world rect that counts as "the whole picture" (fit zoom, label gate)
+	 *  when it is wider than the nodes drawn — a filtered bubble view keeps the
+	 *  full layout's framing. Defaults to the bounds of `nodes`. */
+	bounds?: { minX: number; maxX: number; minY: number; maxY: number };
 }
 
 export interface RendererCallbacks {
@@ -292,6 +318,18 @@ const ZOOM_EASE_MS = 45; // wheel-zoom glide: exponential-ease time constant (~2
 /** Extra pickable radius (px) beyond the disc — the whole halo is
  *  hit-testable (the old flicker fix, minus the picking shader). */
 const PICKING_PAD = 10;
+
+/** Focus mode: how much of a faded node / edge stays visible. */
+const DIM_ALPHA = 0.12;
+/** Topic markers (the bubble view) draw at a constant on-screen size. */
+const TOPIC_LABEL_PX = 11;
+const TOPIC_COUNT_PX = 12;
+const TOPIC_PILL_H = 20;
+const TOPIC_PILL_PAD = 26;
+const TOPIC_PICK_PAD = 4;
+const FRAME_LABEL_PX = 13;
+/** Stroke multiple for an aggregated edge. */
+const HEAVY_EDGE = 2.2;
 
 /** Click vs drag threshold: pointer travel under this many px is a click. */
 const CLICK_SLOP = 4;
@@ -584,6 +622,8 @@ export class GraphCanvasRenderer {
 	private nodeById = new Map<string, CanvasNode>();
 	private settings: GraphRenderSettings | null = null;
 	private visible: ReadonlySet<string> | null = null;
+	/** Focus mode: ids drawn at full strength; everything else fades. null = no focus. */
+	private focus: ReadonlySet<string> | null = null;
 
 	// ── Live physics ──
 	// One d3-force sim shared with the server settle (createGraphSimulation
@@ -639,6 +679,15 @@ export class GraphCanvasRenderer {
 	private nodesPath: Path2D | null = null;
 	private shaftsPath: Path2D = new Path2D();
 	private headsPath: Path2D = new Path2D();
+	/** Aggregated edges (count > 1) stroke heavier; faded twins for focus mode. */
+	private heavyShaftsPath: Path2D = new Path2D();
+	private dimNodesPath: Path2D = new Path2D();
+	private dimShaftsPath: Path2D = new Path2D();
+	private dimHeavyShaftsPath: Path2D = new Path2D();
+	private dimHeadsPath: Path2D = new Path2D();
+	/** Topic markers of the bubble view, with their pre-wrapped screen-size labels. */
+	private topicMarks: { node: CanvasNode; lines: string[]; pillW: number }[] = [];
+	private topicMarkById = new Map<string, { pillW: number }>();
 	private regionCanvas: HTMLCanvasElement | null = null;
 	/** World rect the bitmap covers (drawImage target coords). */
 	private regionRect: { minX: number; minY: number; w: number; h: number } | null = null;
@@ -762,7 +811,7 @@ export class GraphCanvasRenderer {
 			if (n.x > maxX) maxX = n.x;
 			if (n.y > maxY) maxY = n.y;
 		}
-		this.worldBBox = { minX, maxX, minY, maxY };
+		this.worldBBox = data.bounds ?? { minX, maxX, minY, maxY };
 		if (!this.hasFit && data.nodes.length > 0) this.fit();
 		// The camera may be user-restored (constructor initialCamera) — the
 		// gate's "1×" reference still needs the fresh bbox's fit zoom.
@@ -866,6 +915,19 @@ export class GraphCanvasRenderer {
 		this.markDirty();
 	}
 
+	/** Focus mode: draw these ids at full strength and fade everything else
+	 *  (edges stay full only when both ends do). null leaves the graph as is.
+	 *  Faded nodes remain pickable, so a click on one moves the focus there. */
+	setFocus(ids: ReadonlySet<string> | null): void {
+		this.focus = ids;
+		this.geoVersion++;
+		this.markDirty();
+	}
+
+	private inFocus(id: string): boolean {
+		return !this.focus || this.focus.has(id);
+	}
+
 	/** Frame the whole graph (padding included). Keeps the camera on later
 	 *  setData calls — call fit() only for an explicit re-frame (the
 	 *  first-ever open; afterwards the caller-persisted camera wins). */
@@ -886,7 +948,7 @@ export class GraphCanvasRenderer {
 	/** Frame just these nodes (padding included) — the outline's "jump into the
 	 *  graph". A lone node is centred without zooming in past a readable level.
 	 *  Moves the camera, so it reports through onCameraMove like any other move. */
-	focusOn(ids: ReadonlySet<string>): void {
+	focusOn(ids: ReadonlySet<string>, maxFit = 3): void {
 		if (!this.data) return;
 		const picked = this.data.nodes.filter((n) => ids.has(n.id));
 		if (picked.length === 0) return;
@@ -904,9 +966,9 @@ export class GraphCanvasRenderer {
 			if (n.y > maxY) maxY = n.y;
 		}
 		const t = fitTransform({ minX, maxX, minY, maxY }, w, h, 80);
-		// Never closer than 3x the whole-graph framing, never outside the zoom range.
+		// Never closer than maxFit x the whole-graph framing, never outside the zoom range.
 		const [kMin, kMax] = this.zoomBehavior.scaleExtent();
-		const k = Math.min(Math.max(t.k, kMin), kMax, Math.max(this.kFit, 1e-6) * 3);
+		const k = Math.min(Math.max(t.k, kMin), kMax, Math.max(this.kFit, 1e-6) * maxFit);
 		const cx = (minX + maxX) / 2;
 		const cy = (minY + maxY) / 2;
 		select(this.canvas).call(this.zoomBehavior.transform, zoomIdentity.translate(w / 2 - cx * k, h / 2 - cy * k).scale(k));
@@ -1092,11 +1154,34 @@ export class GraphCanvasRenderer {
 		// screen pad — the whole halo stays hit-testable.
 		const maxDist = this.settings.nodeSize * k + PICKING_PAD;
 		const projected: { id: string; x: number; y: number }[] = [];
+		let topicHit: CanvasNode | null = null;
+		let topicBest = Infinity;
 		for (const n of this.data.nodes) {
 			if (this.visible && !this.visible.has(n.id)) continue;
 			if (isImpNodeId(n.id)) continue; // pure geometry — never picked
-			projected.push({ id: n.id, x: n.x * k + tx, y: n.y * k + ty });
+			const sx = n.x * k + tx;
+			const sy = n.y * k + ty;
+			if (n.kind === "topic") {
+				// A closed topic is its bubble; an open one only its header pill,
+				// so the facts inside the ring stay pickable.
+				let d: number;
+				if (n.open) {
+					const half = (this.topicMarkById.get(n.id)?.pillW ?? 60) / 2 + TOPIC_PICK_PAD;
+					if (Math.abs(px - sx) > half || Math.abs(py - sy) > TOPIC_PILL_H / 2 + TOPIC_PICK_PAD) continue;
+					d = -1e9;
+				} else {
+					d = Math.hypot(px - sx, py - sy) - (n.radius ?? 0) * k;
+					if (d > TOPIC_PICK_PAD) continue;
+				}
+				if (d < topicBest) {
+					topicBest = d;
+					topicHit = n;
+				}
+				continue;
+			}
+			projected.push({ id: n.id, x: sx, y: sy });
 		}
+		if (topicHit) return topicHit;
 		const hit = pickNearest(projected, px, py, maxDist);
 		if (!hit) return null;
 		return this.nodeById.get(hit.id) ?? null;
@@ -1267,13 +1352,18 @@ export class GraphCanvasRenderer {
 
 		// Node discs: one Path2D, one fill() per frame. Implication nodes
 		// are pure geometry — never a disc, never a label, never picked.
+		// Topic markers (bubble view) are drawn by drawTopics, not here.
+		// Focus mode splits the discs into a full-strength and a faded path.
 		const nodesPath = new Path2D();
+		const dimNodesPath = new Path2D();
 		for (const n of data.nodes) {
-			if (!isVisible(n.id) || isImpNodeId(n.id)) continue;
-			nodesPath.moveTo(n.x + nodeR, n.y);
-			nodesPath.arc(n.x, n.y, nodeR, 0, Math.PI * 2);
+			if (!isVisible(n.id) || isImpNodeId(n.id) || n.kind === "topic") continue;
+			const path = this.inFocus(n.id) ? nodesPath : dimNodesPath;
+			path.moveTo(n.x + nodeR, n.y);
+			path.arc(n.x, n.y, nodeR, 0, Math.PI * 2);
 		}
 		this.nodesPath = nodesPath;
+		this.dimNodesPath = dimNodesPath;
 
 		// Edge shafts + arrowheads (rendering arc, owner 2026-09-30): all
 		// arrows are PLAIN single shafts — the old double-shaft glyph is
@@ -1283,9 +1373,17 @@ export class GraphCanvasRenderer {
 		// at the center and its arrowhead lands on the conclusion's disc
 		// edge. Single-premise arguments arrive here as ordinary
 		// proposition→proposition edges and draw exactly like any arrow.
+		// A closed topic's bubble is an endpoint at its own radius, and an
+		// aggregated edge (count > 1) strokes heavier. Focus mode sends an
+		// edge to the faded set unless both its ends are in focus.
 		const arrowLen = settings.arrowLength;
 		const shafts = new Path2D();
+		const heavyShafts = new Path2D();
 		const heads = new Path2D();
+		const dimShafts = new Path2D();
+		const dimHeavyShafts = new Path2D();
+		const dimHeads = new Path2D();
+		const radiusOf = (n: CanvasNode) => (n.kind === "topic" && !n.open ? (n.radius ?? nodeR) : nodeR);
 		for (const e of data.edges) {
 			if (!isVisible(e.from) || !isVisible(e.to)) continue;
 			const a = this.nodeById.get(e.from);
@@ -1293,23 +1391,31 @@ export class GraphCanvasRenderer {
 			if (!a || !b) continue;
 			const intoImp = isImpNodeId(e.to);
 			const outOfImp = isImpNodeId(e.from);
-			const g = arrowGeometry(a, b, outOfImp ? 0 : nodeR, intoImp ? 0 : nodeR, arrowLen);
+			const g = arrowGeometry(a, b, outOfImp ? 0 : radiusOf(a), intoImp ? 0 : radiusOf(b), arrowLen);
 			if (!g) continue;
-			shafts.moveTo(g.shaftFrom.x, g.shaftFrom.y);
+			const bright = this.inFocus(e.from) && this.inFocus(e.to);
+			const heavy = (e.count ?? 1) > 1;
+			const lines = bright ? (heavy ? heavyShafts : shafts) : heavy ? dimHeavyShafts : dimShafts;
+			const tips = bright ? heads : dimHeads;
+			lines.moveTo(g.shaftFrom.x, g.shaftFrom.y);
 			if (intoImp) {
 				// toRadius 0 put the tip AT the imp node's center: the
 				// headless shaft terminates there (no head triangle).
-				shafts.lineTo(g.tip.x, g.tip.y);
+				lines.lineTo(g.tip.x, g.tip.y);
 			} else {
-				shafts.lineTo(g.shaftTo.x, g.shaftTo.y);
-				heads.moveTo(g.tip.x, g.tip.y);
-				heads.lineTo(g.left.x, g.left.y);
-				heads.lineTo(g.right.x, g.right.y);
-				heads.closePath();
+				lines.lineTo(g.shaftTo.x, g.shaftTo.y);
+				tips.moveTo(g.tip.x, g.tip.y);
+				tips.lineTo(g.left.x, g.left.y);
+				tips.lineTo(g.right.x, g.right.y);
+				tips.closePath();
 			}
 		}
 		this.shaftsPath = shafts;
+		this.heavyShaftsPath = heavyShafts;
 		this.headsPath = heads;
+		this.dimShaftsPath = dimShafts;
+		this.dimHeavyShaftsPath = dimHeavyShafts;
+		this.dimHeadsPath = dimHeads;
 
 		// Cluster regions are NOT built here: they rasterize into their own
 		// low-res bitmap (see buildRegions), on their own rebuild schedule
@@ -1324,7 +1430,19 @@ export class GraphCanvasRenderer {
 		ctx.font = this.worldLabelFont;
 		const maxW = LABEL_MAX_WIDTH * (settings.labelSize / LABEL_SIZE);
 		for (const n of data.nodes) {
-			if (isVisible(n.id) && !isImpNodeId(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
+			if (isVisible(n.id) && !isImpNodeId(n.id) && n.kind !== "topic") this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
+		}
+		// Topic labels are screen-sized (not world-scaled): wrapped once here.
+		this.topicMarks = [];
+		this.topicMarkById = new Map();
+		ctx.font = `600 ${TOPIC_LABEL_PX}px ${data.fontFamily}`;
+		const measure = (t: string) => ctx.measureText(t).width;
+		for (const n of data.nodes) {
+			if (n.kind !== "topic" || !isVisible(n.id)) continue;
+			const lines = wrapRegionLabel(n.open ? `${n.label} · ${n.count ?? 0}` : n.label, n.open ? 240 : 120, n.open ? 1 : 2, measure);
+			const pillW = Math.max(...lines.map(measure), 0) + TOPIC_PILL_PAD;
+			this.topicMarks.push({ node: n, lines, pillW });
+			this.topicMarkById.set(n.id, { pillW });
 		}
 		ctx.font = prevFont;
 	}
@@ -1334,7 +1452,8 @@ export class GraphCanvasRenderer {
 	 *  setPhysicsTuning. */
 	private buildSim(): void {
 		const data = this.data;
-		if (!data || data.nodes.length === 0) {
+		// A fixed layout (the bubble view) has no physics: nothing drags.
+		if (!data || data.nodes.length === 0 || data.staticLayout) {
 			this.sim = null;
 			this.simById = new Map();
 			return;
@@ -1627,6 +1746,64 @@ export class GraphCanvasRenderer {
 		this.regionRect = { minX, minY, w: spanX, h: spanY };
 	}
 
+	/** Topic markers: a closed topic is a translucent bubble with its fact count
+	 *  inside and its name below; an open one is a dashed ring with a header pill
+	 *  ("− Name · 12") at the top that closes it. Text and strokes keep a
+	 *  constant on-screen size (÷ k); a faded topic (focus mode) dims whole. */
+	private drawTopics(ctx: CanvasRenderingContext2D, k: number, data: CanvasData): void {
+		if (this.topicMarks.length === 0) return;
+		const color = data.colors.node;
+		const text = data.colors.hoverText;
+		ctx.save();
+		ctx.textAlign = "center";
+		for (const { node: n, lines, pillW } of this.topicMarks) {
+			const r = n.radius ?? 8;
+			ctx.globalAlpha = this.inFocus(n.id) ? 1 : DIM_ALPHA * 2;
+			if (!n.open) {
+				ctx.beginPath();
+				ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+				ctx.fillStyle = rgbaFromHex(color, 0.28);
+				ctx.fill();
+				ctx.lineWidth = 1.2 / k;
+				ctx.strokeStyle = rgbaFromHex(color, 0.85);
+				ctx.stroke();
+				ctx.fillStyle = text;
+				if (r * k >= 9) {
+					ctx.font = `700 ${TOPIC_COUNT_PX / k}px ${data.fontFamily}`;
+					ctx.textBaseline = "middle";
+					ctx.fillText(String(n.count ?? 0), n.x, n.y);
+				}
+				ctx.font = `600 ${TOPIC_LABEL_PX / k}px ${data.fontFamily}`;
+				ctx.textBaseline = "top";
+				const lineH = (TOPIC_LABEL_PX * 1.25) / k;
+				lines.forEach((line, i) => ctx.fillText(line, n.x, n.y + r + 4 / k + i * lineH));
+			} else {
+				// The ring round the open topic's facts: centre is a radius below the header.
+				ctx.beginPath();
+				ctx.arc(n.x, n.y + r, r, 0, Math.PI * 2);
+				ctx.setLineDash([5 / k, 4 / k]);
+				ctx.lineWidth = 1 / k;
+				ctx.strokeStyle = rgbaFromHex(color, 0.4);
+				ctx.stroke();
+				ctx.setLineDash([]);
+				const w = pillW / k;
+				const h = TOPIC_PILL_H / k;
+				ctx.beginPath();
+				ctx.roundRect(n.x - w / 2, n.y - h / 2, w, h, h / 2);
+				ctx.fillStyle = rgbaFromHex(color, 0.25);
+				ctx.fill();
+				ctx.lineWidth = 1 / k;
+				ctx.strokeStyle = rgbaFromHex(color, 0.7);
+				ctx.stroke();
+				ctx.fillStyle = text;
+				ctx.font = `600 ${TOPIC_LABEL_PX / k}px ${data.fontFamily}`;
+				ctx.textBaseline = "middle";
+				ctx.fillText(`− ${lines[0] ?? ""}`, n.x, n.y);
+			}
+		}
+		ctx.restore();
+	}
+
 	/** THE draw function: every layer, one frame, one camera. All drawing
 	 *  happens in WORLD coordinates under the camera transform; nothing is
 	 *  recomputed per frame except layer styling. */
@@ -1675,6 +1852,27 @@ export class GraphCanvasRenderer {
 			ctx.drawImage(this.regionCanvas, minX, minY, w, h);
 		}
 
+		// 2. Group frames (bubble view): a faint disc and a label above it.
+		if (data.frames && data.frames.length > 0) {
+			ctx.save();
+			ctx.textAlign = "center";
+			ctx.textBaseline = "bottom";
+			ctx.font = `600 ${FRAME_LABEL_PX / k}px ${data.fontFamily}`;
+			for (const f of data.frames) {
+				const hue = clusterHue(f.id);
+				ctx.beginPath();
+				ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+				ctx.fillStyle = `hsla(${hue}, 55%, 70%, 0.07)`;
+				ctx.fill();
+				ctx.lineWidth = 1 / k;
+				ctx.strokeStyle = `hsla(${hue}, 55%, 70%, 0.3)`;
+				ctx.stroke();
+				ctx.fillStyle = `hsla(${hue}, 55%, 78%, 0.9)`;
+				ctx.fillText(f.label, f.x, f.y - f.r - 3 / k);
+			}
+			ctx.restore();
+		}
+
 		// 3. Edges: shafts + arrowheads from cached paths; width constant on
 		// screen (÷ k), geometry in world units (scales with the graph).
 		// Supports shafts: a second, thinner stroke (owner, 2026-09-29) —
@@ -1684,15 +1882,36 @@ export class GraphCanvasRenderer {
 		if (settings.edgeWidth > 0) {
 			ctx.strokeStyle = data.colors.edge;
 			ctx.fillStyle = data.colors.edge;
-			ctx.lineWidth = settings.edgeWidth / k;
 			ctx.lineCap = "round";
+			// Focus mode: the faded edges go first, under the full-strength ones.
+			if (this.focus) {
+				ctx.globalAlpha = DIM_ALPHA;
+				ctx.lineWidth = settings.edgeWidth / k;
+				ctx.stroke(this.dimShaftsPath);
+				ctx.lineWidth = (settings.edgeWidth * HEAVY_EDGE) / k;
+				ctx.stroke(this.dimHeavyShaftsPath);
+				ctx.fill(this.dimHeadsPath);
+				ctx.globalAlpha = 1;
+			}
+			ctx.lineWidth = settings.edgeWidth / k;
 			ctx.stroke(this.shaftsPath);
+			// Aggregated edges (several merged into one) stroke heavier.
+			ctx.lineWidth = (settings.edgeWidth * HEAVY_EDGE) / k;
+			ctx.stroke(this.heavyShaftsPath);
 			ctx.fill(this.headsPath);
 		}
 
-		// 4. Nodes: one cached Path2D, one fill.
+		// 4. Nodes: one cached Path2D, one fill (faded ones first in focus mode).
 		ctx.fillStyle = data.colors.node;
+		if (this.focus) {
+			ctx.globalAlpha = DIM_ALPHA;
+			ctx.fill(this.dimNodesPath);
+			ctx.globalAlpha = 1;
+		}
 		ctx.fill(this.nodesPath);
+
+		// 5. Topic markers (bubble view): bubbles and open-topic headers.
+		this.drawTopics(ctx, k, data);
 
 		// 6. Node labels — one global gate, faded together. World-scaled
 		// with the graph (they grow as you zoom in, Obsidian-style).
@@ -1702,7 +1921,7 @@ export class GraphCanvasRenderer {
 			ctx.font = this.worldLabelFont;
 			for (const [id, lines] of this.labelLines) {
 				const n = this.nodeById.get(id);
-				if (!n) continue;
+				if (!n || !this.inFocus(id)) continue;
 				drawNameLines(ctx, n.x, n.y, lines, this.world, data.colors.label);
 			}
 			ctx.restore();
@@ -1713,8 +1932,8 @@ export class GraphCanvasRenderer {
 		// else. Shows even when labels are zoomed out (hover is its own
 		// affordance, not a label).
 		if (this.hoverNode && this.hoverFade > 0.02) {
-			const n = this.visible && !this.visible.has(this.hoverNode.id)
-				? null // filtered out by search — no glow on hidden nodes
+			const n = (this.visible && !this.visible.has(this.hoverNode.id)) || this.hoverNode.kind === "topic"
+				? null // filtered out by search — no glow on hidden nodes; topics have their own look
 				: this.hoverNode;
 			if (n) {
 				const glow = ctx.createRadialGradient(n.x, n.y, nodeR, n.x, n.y, glowOuter);

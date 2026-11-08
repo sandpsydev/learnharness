@@ -14,6 +14,12 @@ import { ACCESS_HELP, EXPERT_PAGE, answerContainer, canSubmit, clearDraft, promp
 import type { Answer, QueueItem, SessionState } from "../extension/types";
 import { describePhase, referenceLines } from "../extension/ui";
 
+function addModeMenu(box: HTMLElement, label: string) {
+  const mode = box.ownerDocument.createElement("button");
+  mode.setAttribute("data-e2e", "output-mode-menu-trigger"); mode.textContent = label;
+  box.closest("form")!.insertBefore(mode, box.nextSibling);
+  return mode;
+}
 const fixture = readFileSync(new URL("./fixtures/extension/expert-ai.html", import.meta.url), "utf8");
 function page() {
   const { document, Event: FixtureEvent } = parseHTML(fixture);
@@ -130,10 +136,19 @@ describe("extension page adapter (local fixture only)", () => {
     fillQuestion(document, "Generic native edit");
     assert.equal(box.textContent, "Generic native edit");
   });
+  it("fills when the page shows no output-mode menu, and when the menu says Standard", () => {
+    const { document, box } = page();
+    assert.equal(box.closest("form")!.querySelector('[data-e2e*="mode"]'), null);
+    fillQuestion(document, "Generic question");
+    assert.equal(box.textContent, "Generic question");
+    box.textContent = ""; box.setAttribute("data-empty", "true");
+    addModeMenu(box, " Standard ");
+    fillQuestion(document, "Generic question", true);
+    assert.equal(box.textContent, "Generic question");
+  });
   it("refuses to fill in another mode without clicking its dropdown", () => {
     const { document, box } = page();
-    const mode = box.closest("form")!.querySelector('[data-e2e="output-mode-menu-trigger"]')!;
-    mode.textContent = "Other mode";
+    const mode = addModeMenu(box, "Other mode");
     mode.addEventListener("click", () => assert.fail("must never click the mode dropdown"));
     assert.throws(() => fillQuestion(document, "Generic question"), /Switch Expert AI to Standard, then retry/);
     assert.equal(box.textContent, "");
@@ -204,8 +219,7 @@ describe("extension page adapter (local fixture only)", () => {
     const { document, box } = page();
     Object.defineProperty(document, "visibilityState", { value: "hidden" });
     document.hasFocus = () => false;
-    const mode = box.closest("form")!.querySelector('[data-e2e="output-mode-menu-trigger"]')!;
-    mode.textContent = "Other mode";
+    const mode = addModeMenu(box, "Other mode");
     assert.throws(() => fillQuestion(document, "Generic question", true), /Standard/);
     assert.equal(box.textContent, "");
     const shell = document.querySelector<HTMLElement>(".ec-welcome-modal")!;

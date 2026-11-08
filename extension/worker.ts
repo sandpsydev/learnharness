@@ -2,6 +2,7 @@ import { VerifyApi } from "./api";
 import { DEFAULT_CONFIG, isExpertUrl, validateConfig } from "./config";
 import { Attempts } from "./attempts";
 import { ExtensionController } from "./controller";
+import { HIDDEN_HELP } from "./expert-page";
 import { errorMessage } from "./types";
 import type { ActiveQuestion, Config, QueueItem, Request, SessionState } from "./types";
 import type { Evidence, PageResult } from "./controller";
@@ -52,22 +53,34 @@ async function clipboard(text: string) {
   const response = await chrome.runtime.sendMessage({ target: "clipboard", text });
   if (!response?.ok) throw new Error("Clipboard is unavailable.");
 }
+/**
+ * Expert AI only enables Send in a page the browser considers visible, so the managed page is
+ * the selected tab of a normal window of its own. It is created unfocused, so it never takes
+ * over what the learner is looking at, and it is not minimized.
+ */
+const MANAGED_WINDOW = { type: "normal", focused: false, width: 1100, height: 800 } as const;
 async function focusExpert(automatic = false) {
   if (automatic) {
     const state = await read();
+    let tab: chrome.tabs.Tab | undefined;
     if (state.managedTabId !== undefined) {
-      let tab: chrome.tabs.Tab | undefined;
       try { tab = await chrome.tabs.get(state.managedTabId); } catch { /* Managed tab was closed. */ }
-      if (tab) {
-        if (!isExpertUrl(tab.url ?? "")) throw new Error("The managed Expert AI tab is on a sign-in or different page. Sign in there, then retry.");
-        return state.managedTabId;
-      }
     }
-    // Never select a learner-owned conversation or activate/focus this tab.
-    const tab = await chrome.tabs.create({ url: (await config()).expertUrl, active: false });
-    if (tab.id === undefined) throw new Error("Could not open the background Expert AI tab.");
-    await write({ ...state, managedTabId: tab.id });
-    return tab.id;
+    if (tab?.id !== undefined) {
+      if (!isExpertUrl(tab.url ?? "")) throw new Error("The managed Expert AI tab is on a sign-in or different page. Sign in there, then retry.");
+      if (tab.windowId === state.managedWindowId) return tab.id;
+      // A managed page from before it had its own window is a hidden background tab; give it one.
+      const win = await chrome.windows.create({ tabId: tab.id, ...MANAGED_WINDOW });
+      if (win?.id === undefined) throw new Error("Could not give the Expert AI page a window of its own.");
+      await write({ ...state, managedWindowId: win.id });
+      return tab.id;
+    }
+    // Never select a learner-owned conversation or take focus from the learner.
+    const win = await chrome.windows.create({ url: (await config()).expertUrl, ...MANAGED_WINDOW });
+    const created = win?.tabs?.[0];
+    if (created?.id === undefined || win?.id === undefined) throw new Error("Could not open the separate Expert AI window.");
+    await write({ ...state, managedTabId: created.id, managedWindowId: win.id });
+    return created.id;
   }
   const current = await chrome.windows.getLastFocused();
   const tabs = await chrome.tabs.query({ url: "https://ai.uptodate.com/*" });
@@ -75,7 +88,7 @@ async function focusExpert(automatic = false) {
   const tab = existing ?? await chrome.tabs.create({ url: (await config()).expertUrl, active: true });
   if (tab.id === undefined) throw new Error("Could not open Expert AI. Copy the prompt instead.");
   const state = await read();
-  if (state.managedTabId === tab.id) await write({ ...state, managedTabId: undefined });
+  if (state.managedTabId === tab.id) await write({ ...state, managedTabId: undefined, managedWindowId: undefined });
   await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tab.id, { active: true });
   return tab.id;
@@ -88,8 +101,10 @@ async function submit(tabId: number, item: QueueItem, requestId: string, automat
   let connected = false;
   for (let attempt = 0; attempt < 30; attempt++) {
     const tab = await chrome.tabs.get(tabId);
-    const win = automatic ? undefined : await chrome.windows.get(tab.windowId);
-    if (!automatic && (!tab.active || !win?.focused)) return { ok: false, submitted: false, untouched: true, error: "Keep the Expert AI tab visible and its window focused, then retry." };
+    const win = await chrome.windows.get(tab.windowId);
+    // Expert AI will not enable Send in a hidden page. Say so rather than blaming the sign-in.
+    if (automatic && win.state === "minimized") return { ok: false, submitted: false, untouched: true, hidden: true, error: HIDDEN_HELP };
+    if (!automatic && (!tab.active || !win.focused)) return { ok: false, submitted: false, untouched: true, error: "Keep the Expert AI tab visible and its window focused, then retry." };
     // A tab that is still opening has no committed URL yet; keep waiting for it.
     if (tab.url && !isExpertUrl(tab.url)) return { ok: false, submitted: false, untouched: true, error: "The tab is not on Expert AI, which can happen at a sign-in screen." };
     try { connected = (await chrome.tabs.sendMessage(tabId, { type: "lh-ready" }, { frameId: 0 }))?.ok === true; } catch { /* Page still loading. */ }

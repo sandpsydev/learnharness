@@ -17,7 +17,7 @@ export interface ActiveQuestion {
 }
 export interface SessionState {
   active?: ActiveQuestion; notice?: string;
-  managedTabId?: number; automaticPaused?: string;
+  managedTabId?: number; managedWindowId?: number; automaticPaused?: string;
   recovery?: { kind: "answer"; answer: Answer } | { kind: "highlight"; highlight: Highlight };
 }
 export type Request =

@@ -1,4 +1,4 @@
-import { answerContainer, canSubmit, clearDraft, conversationIsFresh, fillQuestion, promptEvidence, readAnswerWithSources, requireVisible, questionBox, startConversation, submitQuestion } from "./expert-page";
+import { HIDDEN_HELP, answerContainer, canSubmit, clearDraft, conversationIsFresh, fillQuestion, promptEvidence, readAnswerWithSources, requireVisible, questionBox, startConversation, submitQuestion } from "./expert-page";
 import { errorMessage } from "./types";
 import type { Reply } from "./types";
 
@@ -69,6 +69,14 @@ async function waitUntil(check: () => boolean, ms = 10_000, automatic = false) {
   }
   throw new Error("Expert AI did not show the expected fresh conversation or submit control. Use manual paste-back.");
 }
+/** Expert AI only enables Send in a visible page. Give a just-opened window a moment, then stop without touching anything. */
+async function waitUntilVisible(ms = 10_000) {
+  const deadline = Date.now() + ms;
+  while (document.visibilityState !== "visible") {
+    if (Date.now() >= deadline) throw new Error(HIDDEN_HELP);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
 /** Bind an already-sent automatic question found on the page, so its answer can be collected. */
 function adopt(requestId: string, prompt: string) {
   if (pending?.requestId === requestId) return;
@@ -126,6 +134,7 @@ function install() { chrome.runtime.onMessage.addListener((message, sender, resp
   let filling = false;
   void (async () => {
     if (!automatic) requireVisible(document);
+    else await waitUntilVisible();
     reset();
     startConversation(document, automatic);
     await waitUntil(() => conversationIsFresh(document), 10_000, automatic);
@@ -156,14 +165,15 @@ function install() { chrome.runtime.onMessage.addListener((message, sender, resp
     // draft is only text in the composer. In the managed tab, remove it so a later attempt
     // starts clean; a learner's own tab keeps it for them to finish by hand.
     if (automatic && filling && !submitted) { try { clearDraft(document); } catch { /* Best effort. */ } }
-    const hidden = automatic && document.visibilityState !== "visible" ? " (The managed tab is in the background, where the page may not update.)" : "";
-    const message = errorMessage(error) + hidden;
+    // A page that went hidden explains every later failure; do not blame sign-in or the layout.
+    const hidden = automatic && document.visibilityState !== "visible";
+    const message = hidden ? HIDDEN_HELP : errorMessage(error);
     controls = document.createElement("aside");
     controls.setAttribute("role", "alert");
     controls.style.cssText = "padding:12px;border:2px solid #888;background:Canvas;color:CanvasText;font:14px system-ui";
     controls.textContent = `${message} Open the LearnHarness toolbar for Copy prompt and manual paste-back.`;
     document.body.prepend(controls);
-    respond({ ok: false, submitted, untouched: !filling, error: message });
+    respond({ ok: false, submitted, untouched: !filling, error: message, ...(hidden ? { hidden: true } : {}) });
   }).finally(() => { running = false; });
   return true;
 }); document.addEventListener("visibilitychange", attachControls); }

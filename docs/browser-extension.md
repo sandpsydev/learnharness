@@ -37,10 +37,16 @@ Brave support loading unpacked extensions; Arc uses Chrome's extension UI.
 The owner approved automatic asking and return on 2026-10-30. Chrome alarms
 check the paired local queue once a minute even with the popup closed, waking
 the MV3 worker when necessary. Completed answers also notify the worker so they
-can return promptly. One question runs at a time, using a separate tab created
-by the extension with `active: false`. Automatic runs never activate a tab or
-focus a window and never choose a learner-owned conversation. Subsequent
-questions reuse that managed tab, starting a fresh conversation each time.
+can return promptly. One question runs at a time, in a normal Chrome window of its
+own that the extension opens unfocused (`focused: false`), so it does not take
+over the tab you are reading. It cannot be a background tab: Expert AI only
+enables Send in a page the browser shows, and a background tab is hidden. Leave
+that window open, and do not minimize it or cover it completely with other
+windows; it may sit behind your other windows. Automatic runs never activate or
+focus anything and never choose a learner-owned conversation. Subsequent
+questions reuse that managed window, starting a fresh conversation each time. If
+you close it, the next question opens a new one. A managed page left over from an
+older version as a background tab is moved into a window of its own.
 The response mode must already read **Standard**; the dropdown is never changed.
 Only the screened queue item's prompt is filled, with an additional identifier
 check before automatic sending. No other page or app text is sent as a prompt.
@@ -57,8 +63,11 @@ alarms, so launching the app after Chrome needs no popup click. The toolbar
 shows **!**; open the popup for the plain-language reason. An attempt that
 never pressed Send, whether or not the prompt was already typed in, leaves the
 app question queued, clears the typed draft and the local binding, and pauses
-with the page's own reason (for example, that Send never became available while
-the managed tab was in the background). Nothing is left to release. The
+with the page's own reason. If the managed page is hidden (window minimized or
+completely covered), the page waits about ten seconds for it to show, then stops
+without filling anything and says the page is hidden; it does not ask you to sign
+in. Un-minimize or uncover the window and save settings to resume. Nothing is
+left to release. The
 extension never signs in, dismisses a site pop-up, or resubmits a question that
 may have been sent. Fix the page or connection yourself, then open extension
 Settings and save with automatic mode on to resume.
@@ -104,7 +113,7 @@ mode back on resumes a pending completed answer without resubmitting it.
 - **Ask in Expert AI**, or **Ctrl+Shift+L on Mac**, **Alt+Shift+L elsewhere**,
   focuses an existing Expert AI tab or opens a visible one, starts a new
   conversation, fills the prompt and submits. If it chooses the managed tab,
-  that tab becomes manual and later automatic questions get a separate tab.
+  that tab becomes manual and later automatic questions get a separate window.
   Manual fill/send requires the tab
   and window to stay visible/focused. Shortcut settings are at
   `chrome://extensions/shortcuts`. Each question still requires Standard mode.
@@ -167,15 +176,15 @@ The owner should check this first live automatic run:
 1. Rebuild, reload the extension and page scripts, pair it and enable automatic
    mode. Keep the popup closed. Queue two generic management questions.
 2. Stay in the study tab (also try focusing another window). Within about a
-   minute, a separate background tab should start a new Standard conversation,
-   fill the exact first prompt and submit once, without stealing focus or
-   changing any conversation already open in your own tab.
+   minute, a separate Chrome window should open behind or beside your own, start
+   a new Standard conversation, fill the exact first prompt and submit once,
+   without stealing focus or changing any conversation already open in your own tab.
 3. Confirm that streaming finishes before automatic return, that the app shows
    **Expert AI answer received**, and that the next tutor turn gets the answer
    plus source titles/sections. Check both right-pane and bottom-drawer layouts
    when available. The second question should follow in its own fresh conversation.
 4. Leave the popup closed long enough for the worker to sleep, then queue another
-   question. Confirm it still runs. Repeat with the managed tab's window unfocused.
+   question. Confirm it still runs. Repeat with the managed window unfocused, and again after closing it (a new one opens).
 5. Test signed-out access or a site pop-up: nothing should fill or submit, the
    question should stay queued, and **!** plus a clear popup notice should appear.
    Sign in/close the pop-up yourself and save settings to resume.

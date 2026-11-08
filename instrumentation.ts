@@ -13,4 +13,7 @@ export async function register() {
 	// The Obsidian copy (medical fork): watches the graph and keeps the vault in step.
 	const { startObsidianSync } = await import("./src/server/obsidian.ts");
 	startObsidianSync();
+	// Placement (medical fork): keeps every fact placed in the outline, in the background.
+	const { startPlacement } = await import("./src/server/placement.ts");
+	startPlacement();
 }

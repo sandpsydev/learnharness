@@ -138,7 +138,20 @@ export function createVault(vaultPath: string): VaultPort & { appRoot: string } 
 			atomicWrite(inside(rel), text);
 		},
 		remove(rel) {
-			fs.rmSync(inside(rel), { force: true });
+			const target = inside(rel);
+			fs.rmSync(target, { force: true });
+			// A note that moved out of a topic folder leaves it empty: tidy up. rmdir only
+			// removes an EMPTY folder, so anything the learner put there keeps it alive,
+			// and the walk stops at the app folder.
+			let dir = path.dirname(target);
+			while (dir !== appRoot && dir.startsWith(appRoot + path.sep)) {
+				try {
+					fs.rmdirSync(dir);
+				} catch {
+					break;
+				}
+				dir = path.dirname(dir);
+			}
 		},
 		exists(rel) {
 			return fs.existsSync(inside(rel));

@@ -11,6 +11,7 @@ import { chatStore } from "../store/chats.ts";
 import { graphStore } from "../store/graph.ts";
 import { jobStore } from "../store/jobs.ts";
 import { libraryStore } from "../store/library.ts";
+import { placementStore } from "../store/placements.ts";
 import { settingsStore } from "../store/settings.ts";
 import { verifyStore } from "../store/verify.ts";
 import { resolveSettings, type EffectiveSettings } from "../core/settings-resolution.ts";
@@ -24,6 +25,7 @@ export const stores = {
 	libraryStore,
 	verifyStore,
 	captureStore,
+	placementStore,
 };
 
 export type Stores = typeof stores;

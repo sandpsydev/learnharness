@@ -19,8 +19,9 @@ import path from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
 import { PATHS } from "../../../config.ts";
 import { FACT_TYPES, ORGAN_SYSTEMS } from "../../core/contracts/graph.ts";
+import { PLACEMENT_ASPECTS } from "../../core/contracts/placement.ts";
 import type { OrganizerChangePreview, OrganizerMessage, RawOrganizerChange } from "../../core/organizer-types.ts";
-import type { GraphStore } from "../../core/ports.ts";
+import type { GraphStore, PlacementStore } from "../../core/ports.ts";
 import { FRAGMENT_RE } from "../../core/prompt-segments.ts";
 import type { PiEngine } from "../models.ts";
 import { organizerTools } from "../tools/graph-organizer.ts";
@@ -40,6 +41,8 @@ function vocabularySection(): string {
 		"Organ systems (use the id): " + ORGAN_SYSTEMS.map((s) => `\`${s.id}\` (${s.label})`).join(", ") + ".",
 		"",
 		"Fact types (use the id; a node has exactly one): " + FACT_TYPES.map((t) => `\`${t.id}\` (${t.label})`).join(", ") + ".",
+		"",
+		"Aspects for a placement (use the id): " + PLACEMENT_ASPECTS.map((a) => `\`${a.id}\` (${a.label})`).join(", ") + ".",
 	].join("\n");
 }
 
@@ -75,6 +78,8 @@ export interface OrganizerRunResult {
 export async function runOrganizer(opts: {
 	engine: PiEngine | undefined;
 	graphStore: GraphStore;
+	/** The placement ledger — read for the outline, and for checking set_placement. */
+	placements?: Pick<PlacementStore, "read">;
 	messages: readonly OrganizerMessage[];
 	signal: AbortSignal | undefined;
 	onStep?: (usage: Usage, model: string, step: number) => void;
@@ -83,6 +88,7 @@ export async function runOrganizer(opts: {
 	const tools = healToolRecord(
 		organizerTools({
 			graphStore: opts.graphStore,
+			...(opts.placements ? { placements: opts.placements } : {}),
 			onProposal: (p) => {
 				proposal = p;
 			},

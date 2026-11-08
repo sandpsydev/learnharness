@@ -10,7 +10,7 @@
  * undone.
  */
 
-/** The seven things the organizer can do. Deleting or merging nodes is
+/** The eight things the organizer can do. Deleting or merging nodes is
  *  deliberately absent (not asked for — a possible follow-up). */
 export const ORGANIZER_OPS = [
 	"create_node",
@@ -20,11 +20,14 @@ export const ORGANIZER_OPS = [
 	"add_connection",
 	"remove_connection",
 	"change_connection",
+	"set_placement",
 ] as const;
 export type OrganizerOp = (typeof ORGANIZER_OPS)[number];
 
 /** Most changes one proposal may carry — keeps a set reviewable. */
 export const ORGANIZER_MAX_CHANGES = 40;
+/** Most facts one set_placement may move. */
+export const ORGANIZER_MAX_PLACED = 100;
 /** Name = a short handle, like a glossary headword. */
 export const ORGANIZER_NAME_MAX = 80;
 /** Statement = one self-contained proposition. */
@@ -55,6 +58,14 @@ export interface RawOrganizerChange {
 	premises?: string[];
 	/** add_connection / change_connection: the node the premises imply. */
 	conclusion?: string;
+	/** set_placement: the facts to move (existing node ids or refs of nodes created earlier in the set). */
+	nodeIds?: string[];
+	/** set_placement: the topic — an existing topic's name or id, or a new topic's name. */
+	topic?: string;
+	/** set_placement: the organ-system id; required only when the topic is new. */
+	system?: string;
+	/** set_placement: an aspect id; absent keeps each fact's current aspect. */
+	aspect?: string;
 }
 
 /** One before/after row on a change card. `before`/`after` are display text;
@@ -101,6 +112,8 @@ export interface OrganizerHistoryEntry {
 	previews: OrganizerChangePreview[];
 	nodes: OrganizerLineDiff;
 	chains: OrganizerLineDiff;
+	/** The placement ledger's lines this set appended (absent on entries from before placement existed). */
+	placements?: OrganizerLineDiff;
 	/** Node ids this set created (undo refuses if anything else touched them since). */
 	createdNodeIds: string[];
 	undoneAt?: string;

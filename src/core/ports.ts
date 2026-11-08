@@ -28,6 +28,8 @@ import type {
 	LibraryBook,
 	LibraryChunk,
 	CaptureItem,
+	PlacementLine,
+	PlacerRun,
 	CaptureStatus,
 	VerifyHighlight,
 	VerifyItem,
@@ -326,4 +328,24 @@ export interface ReviewStore {
 	assetSize(file: string): number | null;
 	readCatalogue(): IllnessCatalogue | null;
 	writeCatalogue(catalogue: IllnessCatalogue): void;
+}
+
+// ─── PlacementStore — where each fact sits in the outline (data/graph/placements.jsonl) ───
+// Append-only like the graph ledgers: topics, places and withdrawn places
+// (contracts/placement.ts). The organizer's undo is the one caller that
+// rewrites it (to take its own appended lines back out).
+
+export interface PlacementStore {
+	/** Every line, in append order. */
+	read(): PlacementLine[];
+	/** Append lines in one write. */
+	append(lines: readonly PlacementLine[]): void;
+	/** Replace the whole ledger atomically (organizer undo only). */
+	rewrite(lines: readonly PlacementLine[]): void;
+}
+
+/** The placer's run journal (data/graph/placer-runs.json): newest last, capped. */
+export interface PlacerJournalStore {
+	read(): PlacerRun[];
+	write(runs: PlacerRun[]): void;
 }

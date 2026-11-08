@@ -883,6 +883,35 @@ export class GraphCanvasRenderer {
 		);
 	}
 
+	/** Frame just these nodes (padding included) — the outline's "jump into the
+	 *  graph". A lone node is centred without zooming in past a readable level.
+	 *  Moves the camera, so it reports through onCameraMove like any other move. */
+	focusOn(ids: ReadonlySet<string>): void {
+		if (!this.data) return;
+		const picked = this.data.nodes.filter((n) => ids.has(n.id));
+		if (picked.length === 0) return;
+		const w = this.canvas.clientWidth;
+		const h = this.canvas.clientHeight;
+		if (w < 10 || h < 10) return;
+		let minX = Infinity;
+		let minY = Infinity;
+		let maxX = -Infinity;
+		let maxY = -Infinity;
+		for (const n of picked) {
+			if (n.x < minX) minX = n.x;
+			if (n.y < minY) minY = n.y;
+			if (n.x > maxX) maxX = n.x;
+			if (n.y > maxY) maxY = n.y;
+		}
+		const t = fitTransform({ minX, maxX, minY, maxY }, w, h, 80);
+		// Never closer than 3x the whole-graph framing, never outside the zoom range.
+		const [kMin, kMax] = this.zoomBehavior.scaleExtent();
+		const k = Math.min(Math.max(t.k, kMin), kMax, Math.max(this.kFit, 1e-6) * 3);
+		const cx = (minX + maxX) / 2;
+		const cy = (minY + maxY) / 2;
+		select(this.canvas).call(this.zoomBehavior.transform, zoomIdentity.translate(w / 2 - cx * k, h / 2 - cy * k).scale(k));
+	}
+
 	/** Refresh the label-gate's "1×" reference from the current bbox +
 	 *  viewport. kFit feeds ONLY zoomRatioOf now (the 2026-09-15 pivot
 	 *  removed it from geometry) — so this never touches geoVersion. */

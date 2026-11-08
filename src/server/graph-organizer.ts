@@ -20,7 +20,13 @@ import { randomBytes } from "node:crypto";
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
 import { runOrganizer } from "../agent/subagents/organizer.ts";
 import { extractionStatuses } from "../agent/subagents/extraction.ts";
-import { applyOrganizerChanges, organizerHistoryItems, undoOrganizerEntry, type OrganizerHistoryStore } from "../core/graph-organizer.ts";
+import {
+	applyOrganizerChanges,
+	organizerHistoryItems,
+	undoOrganizerEntry,
+	type OrganizerHistoryStore,
+	type OrganizerPlacementPort,
+} from "../core/graph-organizer.ts";
 import { settleGraphLayout } from "../core/layout-settle.ts";
 import {
 	type OrganizerHistoryItem,
@@ -31,6 +37,7 @@ import type { GraphStore } from "../core/ports.ts";
 import { ModelsNotConfiguredError, ProviderKeyMissingError, ROLE_SLOT } from "../core/settings.ts";
 import { resolveRoleSpec } from "../core/settings-resolution.ts";
 import { organizerHistoryStore } from "../store/organizer-history.ts";
+import { placementStore } from "../store/placements.ts";
 import { graphRevision } from "./graph.ts";
 import { providerKeyPresent } from "./keys.ts";
 import { stores } from "./stores.ts";
@@ -55,6 +62,8 @@ export type OrganizerUndoOutcome =
 export interface GraphOrganizerDeps {
 	graphStore: GraphStore;
 	history: OrganizerHistoryStore;
+	/** The placement ledger (set_placement). */
+	placements?: OrganizerPlacementPort;
 	/** The organizer role's engine, or undefined when no model is configured. */
 	engine: () => PiEngine | undefined;
 	/** The provider's key is gone — the same refusal the other roles give. */
@@ -106,7 +115,7 @@ export function createGraphOrganizer(deps: GraphOrganizerDeps) {
 		if (busy.on) return fail(409, "organizer_busy", "The organizer is still working on your last message.");
 		busy.on = true;
 		try {
-			const run = await runOrganizer({ engine, graphStore: deps.graphStore, messages, signal });
+			const run = await runOrganizer({ engine, graphStore: deps.graphStore, ...(deps.placements ? { placements: deps.placements } : {}), messages, signal });
 			if (!run.proposal) return { ok: true, reply: run.reply };
 			const proposal: OrganizerProposal = {
 				id: `prop_${randomBytes(6).toString("hex")}`,
@@ -144,7 +153,7 @@ export function createGraphOrganizer(deps: GraphOrganizerDeps) {
 		if (!proposal) return fail(404, "proposal_not_found", "That proposal is no longer available — ask for the change again.");
 		// THE SYNC BLOCK: check-and-write with no await in between.
 		const result = applyOrganizerChanges(
-			{ graphStore: deps.graphStore, history: deps.history },
+			{ graphStore: deps.graphStore, history: deps.history, ...(deps.placements ? { placements: deps.placements } : {}) },
 			{ summary: proposal.summary, changes: proposal.changes },
 		);
 		if (!result.ok) {
@@ -164,7 +173,7 @@ export function createGraphOrganizer(deps: GraphOrganizerDeps) {
 	function undo(entryId: string): OrganizerUndoOutcome {
 		const refused = guard();
 		if (refused) return refused;
-		const result = undoOrganizerEntry({ graphStore: deps.graphStore, history: deps.history }, entryId);
+		const result = undoOrganizerEntry({ graphStore: deps.graphStore, history: deps.history, ...(deps.placements ? { placements: deps.placements } : {}) }, entryId);
 		if (!result.ok) return fail(result.code === "not_found" ? 404 : 409, result.code, result.reason);
 		settle();
 		return { ok: true, entryId, graphRevision: deps.revision(), history: organizerHistoryItems(deps.history.read()) };
@@ -181,6 +190,7 @@ export function createGraphOrganizer(deps: GraphOrganizerDeps) {
 export const graphOrganizer = createGraphOrganizer({
 	graphStore: stores.graphStore,
 	history: organizerHistoryStore,
+	placements: placementStore,
 	// A foreground engine: the learner just asked for this, so it is not a
 	// background run (those wait on the subscription's background opt-in).
 	engine: () => {

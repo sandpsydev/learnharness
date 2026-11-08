@@ -21,3 +21,4 @@ export * from "./contracts/verify.ts";
 export * from "./contracts/anki.ts";
 export * from "./contracts/captures.ts";
 export * from "./contracts/review.ts";
+export * from "./contracts/placement.ts";

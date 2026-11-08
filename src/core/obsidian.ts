@@ -10,8 +10,14 @@
  * the same reconciler with an in-memory vault.
  *
  * What the vault gets, all under ONE app-owned folder:
- *   Nodes/<name>.md              one note per proposition
- *   Systems/System - <x>.md      one index note per organ system
+ *   <System>/<Topic>/<name>.md   one note per proposition that has a place in
+ *                                the outline (organ system › topic; the aspect
+ *                                is in the note and on the topic's index note)
+ *   <System>/<Topic>/Topic - <Topic>.md
+ *                                the topic's index note: its facts by aspect
+ *   Nodes/<name>.md              a proposition not placed yet (it moves into
+ *                                its topic folder, My notes intact, when it is)
+ *   Systems/System - <x>.md      one map of content per organ system
  *   Illness scripts/<x>.md       the Review-mode scripts (illness-script.ts)
  *   Attachments/<file>           images the scripts embed
  *
@@ -24,8 +30,9 @@
  *   - One-way: nothing here reads a vault edit back into the graph.
  */
 
-import type { FactType, GraphChain, GraphNode } from "./contracts/graph.ts";
+import type { FactType, GraphChain, GraphNode, OrganSystem } from "./contracts/graph.ts";
 import { FACT_TYPES, ORGAN_SYSTEMS, factTypeLabel } from "./contracts/graph.ts";
+import { PLACEMENT_ASPECTS, placementAspectLabel, type NodePlacement, type PlacementTopic } from "./contracts/placement.ts";
 
 // ─── layout ──────────────────────────────────────────────────────────────────
 
@@ -109,7 +116,7 @@ export class StemRegistry {
 
 // ─── frontmatter ─────────────────────────────────────────────────────────────
 
-export type NoteKind = "node" | "system" | "script";
+export type NoteKind = "node" | "system" | "script" | "topic";
 
 const yamlString = (value: string): string => JSON.stringify(value);
 
@@ -159,7 +166,7 @@ export function readManagedHeader(text: string): ManagedHeader | null {
 	if (fields.lh_managed !== "true") return null;
 	const kind = fields.lh_kind;
 	const id = fields.lh_id;
-	if ((kind !== "node" && kind !== "system" && kind !== "script") || !id) return null;
+	if ((kind !== "node" && kind !== "system" && kind !== "script" && kind !== "topic") || !id) return null;
 	return { kind, id };
 }
 
@@ -291,8 +298,18 @@ export function nodeTags(node: Pick<GraphNode, "systems" | "factType">): string[
 	];
 }
 
+/** Where a placed node sits, with the note names its links need. */
+export interface NodePlace {
+	topicStem: string;
+	topicName: string;
+	systemLabel: string;
+	aspectLabel: string;
+}
+
 export interface NodeNoteInput {
 	node: GraphNode;
+	/** The node's place in the outline, when it has one. */
+	place?: NodePlace;
 	stems: ReadonlyMap<string, string>;
 	nodesById: ReadonlyMap<string, GraphNode>;
 	chains: readonly GraphChain[];
@@ -316,12 +333,17 @@ export function renderNodeNote(input: NodeNoteInput): string {
 			["lh_id", node.id],
 			["aliases", aliasesOf(node)],
 			["tags", nodeTags(node)],
+			["topic", input.place ? clean(input.place.topicName) : undefined],
+			["aspect", input.place ? input.place.aspectLabel : undefined],
 		]),
 		"",
 		`# ${clean(node.name)}`,
 		"",
 		clean(node.statement),
 	];
+	if (input.place) {
+		lines.push("", `In ${wikilink(input.place.topicStem, input.place.topicName)} › ${input.place.aspectLabel} (${input.place.systemLabel})`);
+	}
 
 	const because: string[] = [];
 	const leadsTo: string[] = [];
@@ -349,22 +371,40 @@ export function renderNodeNote(input: NodeNoteInput): string {
 	return lines.join("\n");
 }
 
-/** One index note per organ system that has nodes (plus "Untagged" when some node has no system). */
+/** One index note per organ system that has nodes (plus "Untagged" when some node has no system).
+ *  Without a placement it is the old map: nodes by fact type. With one, it maps the system's
+ *  topics (each linked to its topic note) and lists the nodes not yet placed. */
 export function renderSystemNotes(
 	nodes: readonly GraphNode[],
 	stems: ReadonlyMap<string, string>,
+	outline?: OutlineForVault,
 ): DesiredNote[] {
+	const byName = (a: GraphNode, b: GraphNode) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
 	const groups = new Map<string, GraphNode[]>();
+	const topicsOfSystem = new Map<string, Array<{ topic: PlacementTopic; stem: string; count: number }>>();
+	if (outline) {
+		for (const topic of outline.topics) {
+			const count = nodes.filter((n) => outline.placement.byNode[n.id]?.topicId === topic.id).length;
+			if (count === 0) continue;
+			const list = topicsOfSystem.get(topic.system) ?? [];
+			list.push({ topic, stem: outline.topicStems.get(topic.id) ?? safeFileStem(topic.name), count });
+			topicsOfSystem.set(topic.system, list);
+		}
+	}
 	for (const node of nodes) {
+		// A placed node is mapped through its topic; only the rest are listed by tag.
+		if (outline && outline.placement.byNode[node.id]) continue;
 		const systems = node.systems && node.systems.length > 0 ? node.systems : [UNTAGGED_SYSTEM_ID];
 		for (const id of systems) groups.set(id, [...(groups.get(id) ?? []), node]);
 	}
 	const out: DesiredNote[] = [];
 	for (const id of [...ORGAN_SYSTEMS.map((s) => s.id as string), UNTAGGED_SYSTEM_ID]) {
-		const members = groups.get(id);
-		if (!members || members.length === 0) continue;
+		const members = groups.get(id) ?? [];
+		const topics = topicsOfSystem.get(id) ?? [];
+		if (members.length === 0 && topics.length === 0) continue;
 		const stem = systemStem(id);
-		const byName = (a: GraphNode, b: GraphNode) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+		const placedCount = topics.reduce((sum, t) => sum + t.count, 0);
+		const total = members.length + placedCount;
 		const lines: string[] = [
 			frontmatter([
 				["lh_managed", true],
@@ -375,40 +415,148 @@ export function renderSystemNotes(
 			"",
 			`# ${systemLabelOf(id)}`,
 			"",
-			`${members.length} ${members.length === 1 ? "note" : "notes"} from your LearnHarness graph.`,
+			`${total} ${total === 1 ? "note" : "notes"} from your LearnHarness graph.`,
 		];
-		const typed: Array<[string, GraphNode[]]> = [
-			...FACT_TYPES.map((t): [string, GraphNode[]] => [factTypeLabel(t.id as FactType), members.filter((m) => m.factType === t.id).sort(byName)]),
-			["No fact type", members.filter((m) => m.factType === undefined).sort(byName)],
-		];
-		for (const [title, list] of typed) {
-			if (list.length === 0) continue;
-			lines.push("", `## ${title}`, "", ...list.map((m) => `- ${wikilink(stems.get(m.id) ?? safeFileStem(m.name), m.name)}`));
+		if (topics.length > 0) {
+			lines.push("", "## Topics", "");
+			for (const t of topics.sort((a, b) => a.topic.name.localeCompare(b.topic.name) || a.topic.id.localeCompare(b.topic.id))) {
+				lines.push(`- ${wikilink(t.stem, t.topic.name)} (${t.count})`);
+			}
+		}
+		if (!outline) {
+			const typed: Array<[string, GraphNode[]]> = [
+				...FACT_TYPES.map((t): [string, GraphNode[]] => [factTypeLabel(t.id as FactType), members.filter((m) => m.factType === t.id).sort(byName)]),
+				["No fact type", members.filter((m) => m.factType === undefined).sort(byName)],
+			];
+			for (const [title, list] of typed) {
+				if (list.length === 0) continue;
+				lines.push("", `## ${title}`, "", ...list.map((m) => `- ${wikilink(stems.get(m.id) ?? safeFileStem(m.name), m.name)}`));
+			}
+		} else if (members.length > 0) {
+			lines.push("", "## Not placed yet", "", ...[...members].sort(byName).map((m) => `- ${wikilink(stems.get(m.id) ?? safeFileStem(m.name), m.name)}`));
 		}
 		out.push({ kind: "system", id, path: `${SYSTEMS_DIR}/${stem}.md`, content: lines.join("\n") });
 	}
 	return out;
 }
 
+/** The folder name of an organ system in the vault ("GI-Hepatobiliary"). */
+export function systemFolder(id: string): string {
+	return safeFileStem(systemLabelOf(id), id);
+}
+
+/** The outline placement the vault layout is built from (the graph payload's view). */
+export interface PlacementForVault {
+	topics: readonly PlacementTopic[];
+	byNode: Readonly<Record<string, NodePlacement>>;
+}
+
+/** The resolved layout: where each topic's folder and note go, and which node is where. */
+export interface OutlineForVault {
+	placement: PlacementForVault;
+	/** Topics that hold at least one live node. */
+	topics: PlacementTopic[];
+	/** topic id → the stem of its index note ("Topic - Small-bowel obstruction"). */
+	topicStems: Map<string, string>;
+	/** topic id → "<System>/<Topic>" folder, relative to the app folder. */
+	topicFolders: Map<string, string>;
+}
+
+/** Stems and folders for the topics. Folder names are unique within a system (case-insensitive),
+ *  note stems unique across the whole folder — Obsidian resolves links by name. */
+export function planOutline(nodes: readonly GraphNode[], placement: PlacementForVault, reserved: Iterable<string>): OutlineForVault {
+	const live = new Set(nodes.map((n) => n.id));
+	const used = new Set<string>();
+	for (const [nodeId, p] of Object.entries(placement.byNode)) if (live.has(nodeId)) used.add(p.topicId);
+	const topics = placement.topics
+		.filter((t) => used.has(t.id))
+		.sort((a, b) => a.system.localeCompare(b.system) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+	const stems = new StemRegistry(reserved);
+	const folderNames = new Map<string, StemRegistry>();
+	const topicStems = new Map<string, string>();
+	const topicFolders = new Map<string, string>();
+	for (const topic of topics) {
+		topicStems.set(topic.id, stems.claim(`Topic - ${safeFileStem(topic.name, "Topic")}`, topic.id));
+		const registry = folderNames.get(topic.system) ?? new StemRegistry();
+		folderNames.set(topic.system, registry);
+		topicFolders.set(topic.id, `${systemFolder(topic.system)}/${registry.claim(safeFileStem(topic.name, "Topic"), topic.id)}`);
+	}
+	return { placement, topics, topicStems, topicFolders };
+}
+
+/** One topic's index note: its facts by aspect, in illness-script order. */
+export function renderTopicNote(
+	topic: PlacementTopic,
+	outline: OutlineForVault,
+	nodes: readonly GraphNode[],
+	stems: ReadonlyMap<string, string>,
+): DesiredNote {
+	const members = nodes
+		.filter((n) => outline.placement.byNode[n.id]?.topicId === topic.id)
+		.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+	const label = systemLabelOf(topic.system);
+	const lines: string[] = [
+		frontmatter([
+			["lh_managed", true],
+			["lh_kind", "topic"],
+			["lh_id", topic.id],
+			["tags", [`system/${topic.system}`, "lh-index", "lh-topic"]],
+		]),
+		"",
+		`# ${clean(topic.name)}`,
+		"",
+		`${members.length} ${members.length === 1 ? "fact" : "facts"} · ${wikilink(systemStem(topic.system), label)}`,
+	];
+	for (const aspect of PLACEMENT_ASPECTS) {
+		const list = members.filter((m) => outline.placement.byNode[m.id]?.aspect === aspect.id);
+		if (list.length === 0) continue;
+		lines.push("", `## ${placementAspectLabel(aspect.id)}`, "", ...list.map((m) => `- ${wikilink(stems.get(m.id) ?? safeFileStem(m.name), m.name)}`));
+	}
+	const stem = outline.topicStems.get(topic.id) ?? safeFileStem(topic.name);
+	return { kind: "topic", id: topic.id, path: `${outline.topicFolders.get(topic.id)}/${stem}.md`, content: lines.join("\n") };
+}
+
 export interface GraphForVault {
 	nodes: readonly GraphNode[];
 	chains: readonly GraphChain[];
 	fileSources: FileSources;
+	/** Where each fact sits in the outline. Absent = the flat layout (everything under Nodes/). */
+	placement?: PlacementForVault;
 }
 
-/** Everything the graph contributes to the vault: node notes + system indexes.
+/** Everything the graph contributes to the vault: node notes, topic notes + system maps.
  *  `reserved` is stems already taken (scripts, files the learner added). */
 export function buildGraphNotes(graph: GraphForVault, reserved: Iterable<string> = []): { notes: DesiredNote[]; names: NodeNamePlan } {
-	const names = planNodeNames(graph.nodes, [...systemStems(), ...reserved]);
+	const reservedStems = [...systemStems(), ...reserved];
+	const outline = graph.placement ? planOutline(graph.nodes, graph.placement, reservedStems) : undefined;
+	const names = planNodeNames(graph.nodes, [...reservedStems, ...(outline ? outline.topicStems.values() : [])]);
 	const nodesById = new Map(graph.nodes.map((n) => [n.id, n]));
 	const live = graph.chains.filter((c) => nodesById.has(c.conclusion) && c.premises.every((p) => nodesById.has(p)));
-	const notes: DesiredNote[] = graph.nodes.map((node) => ({
-		kind: "node",
-		id: node.id,
-		path: names.paths.get(node.id)!,
-		content: renderNodeNote({ node, stems: names.stems, nodesById, chains: live, fileSources: graph.fileSources }),
-	}));
-	notes.push(...renderSystemNotes(graph.nodes, names.stems));
+	const topicOf = new Map((outline?.topics ?? []).map((t) => [t.id, t]));
+	const notes: DesiredNote[] = graph.nodes.map((node) => {
+		const placed = outline?.placement.byNode[node.id];
+		const topic = placed ? topicOf.get(placed.topicId) : undefined;
+		let place: NodePlace | undefined;
+		let path = names.paths.get(node.id)!;
+		if (outline && placed && topic) {
+			place = {
+				topicStem: outline.topicStems.get(topic.id)!,
+				topicName: topic.name,
+				systemLabel: systemLabelOf(topic.system),
+				aspectLabel: placementAspectLabel(placed.aspect),
+			};
+			path = `${outline.topicFolders.get(topic.id)}/${names.stems.get(node.id)!}.md`;
+			names.paths.set(node.id, path);
+		}
+		return {
+			kind: "node",
+			id: node.id,
+			path,
+			content: renderNodeNote({ node, ...(place ? { place } : {}), stems: names.stems, nodesById, chains: live, fileSources: graph.fileSources }),
+		};
+	});
+	if (outline) for (const topic of outline.topics) notes.push(renderTopicNote(topic, outline, graph.nodes, names.stems));
+	notes.push(...renderSystemNotes(graph.nodes, names.stems, outline));
 	return { notes, names };
 }
 

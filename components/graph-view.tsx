@@ -78,6 +78,13 @@ import { MenuShell } from "@/components/menu-shell.tsx";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog.tsx";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
 import { GraphOrganizerControl } from "@/components/graph-organizer.tsx";
+import {
+	GraphOutlineButton,
+	GraphOutlinePanel,
+	outlineVisibleIds,
+	setOutlineSelection,
+	useOutlineSelection,
+} from "@/components/graph-outline.tsx";
 import { AnkiDialog } from "@/components/anki-dialog";
 import { Hint } from "@/components/ui/hint";
 import {
@@ -863,6 +870,7 @@ export function GraphChromeRow({
 	onOpenChains,
 	tags,
 	organizer,
+	outline,
 }: {
 	isEmpty: boolean;
 	query: string;
@@ -885,6 +893,9 @@ export function GraphChromeRow({
 	/** The knowledge-organizer agent (medical fork) — an Organize control
 	 *  after Tags, rendered only when supplied. */
 	organizer?: React.ComponentProps<typeof GraphOrganizerControl>;
+	/** The textbook outline (medical fork) — an Outline control before Tags,
+	 *  rendered only when supplied. The panel itself lives in the graph root. */
+	outline?: React.ComponentProps<typeof GraphOutlineButton>;
 }) {
 	return (
 		<>
@@ -929,6 +940,11 @@ export function GraphChromeRow({
 							Chains
 						</button>
 					</Hint>
+				</div>
+			)}
+			{!isEmpty && outline && (
+				<div className="graph-chrome-fade-in shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
+					<GraphOutlineButton {...outline} />
 				</div>
 			)}
 			{!isEmpty && tags && (
@@ -1100,16 +1116,30 @@ export function GraphView({
 	// mode can read the same filter later.
 	const tagFilter = useTagFilter();
 	const tagFilterOn = isTagFilterActive(tagFilter);
+	// The outline (medical fork): clicking a branch narrows the graph to those
+	// facts, exactly like a filter chip. The panel is component-local state.
+	const outlineSelection = useOutlineSelection();
+	const outlineOn = outlineSelection !== null;
+	const [outlineOpen, setOutlineOpen] = useState(false);
 	const visibleIds = useMemo(() => {
 		const set = new Set<string>();
 		if (snapshot) {
 			const byTags = tagFilterOn ? tagVisibleIds(snapshot.nodes, snapshot.impLinks, tagFilter) : null;
+			const byOutline = outlineSelection
+				? outlineVisibleIds(snapshot.nodes, snapshot.impLinks, snapshot.placement, outlineSelection)
+				: null;
 			for (const node of snapshot.nodes) {
-				if (isNodeVisible(node, query) && (byTags === null || byTags.has(node.id))) set.add(node.id);
+				if (
+					isNodeVisible(node, query) &&
+					(byTags === null || byTags.has(node.id)) &&
+					(byOutline === null || byOutline.has(node.id))
+				) {
+					set.add(node.id);
+				}
 			}
 		}
 		return set;
-	}, [snapshot, query, tagFilter, tagFilterOn]);
+	}, [snapshot, query, tagFilter, tagFilterOn, outlineSelection]);
 
 	// Fetch the derived graph. Re-runs when a background pipeline run
 	// finishes (refreshTick) — its merges just landed in the ledger.
@@ -1487,10 +1517,57 @@ export function GraphView({
 	// Feed #3 — visibility: hidden nodes drop out of rendering, picking,
 	// hover, AND labels; edges drop when either endpoint is hidden.
 	useEffect(() => {
-		rendererRef.current?.setVisible(query.trim() || tagFilterOn ? visibleIds : null);
+		rendererRef.current?.setVisible(query.trim() || tagFilterOn || outlineOn ? visibleIds : null);
 		// The open detail card cannot outlive its node's visibility.
 		setSelected((sel) => (sel && visibleIds.has(sel.node.id) ? sel : null));
-	}, [visibleIds, query, tagFilterOn]);
+	}, [visibleIds, query, tagFilterOn, outlineOn]);
+
+	// Choosing an outline branch frames its facts. Keyed on the selection alone,
+	// so a snapshot refetch never yanks the camera.
+	useEffect(() => {
+		if (!outlineSelection) return;
+		const snap = snapshotRef.current;
+		if (!snap) return;
+		const ids = outlineVisibleIds(snap.propositions, [], snap.placement, outlineSelection);
+		rendererRef.current?.focusOn(ids);
+	}, [outlineSelection]);
+
+	// Placement is automatic and runs in the background: while facts wait for a
+	// place, watch the (tiny) status and refetch the graph when it moves.
+	const unplacedCount = snapshot?.placement?.unplaced ?? 0;
+	useEffect(() => {
+		if (unplacedCount === 0) return;
+		const timer = setInterval(() => {
+			void fetch("/api/graph/placements")
+				.then((r) => r.json() as Promise<{ unplaced?: number }>)
+				.then((st) => {
+					if (typeof st.unplaced === "number" && st.unplaced !== unplacedCount) setRefreshTick((t) => t + 1);
+				})
+				.catch(() => {});
+		}, 6000);
+		return () => clearInterval(timer);
+	}, [unplacedCount]);
+
+	// Open a fact from the outline: frame it and show its card, as a click on its node does.
+	const openFact = (nodeId: string) => {
+		const snap = snapshotRef.current;
+		const node = snap?.nodes.find((n) => n.id === nodeId);
+		if (!snap || !node) return;
+		// Another filter would hide it (and close the card at once): lift those.
+		if (!visibleIds.has(nodeId)) {
+			setTagFilter(EMPTY_TAG_FILTER);
+			setQuery("");
+		}
+		rendererRef.current?.focusOn(new Set([nodeId]));
+		const box = containerRef.current;
+		setSelected({
+			node,
+			sourceIds: snap.nodeSessions[node.id] ?? [],
+			anchor: { x: (box?.clientWidth ?? 0) / 2, y: (box?.clientHeight ?? 0) / 2 },
+		});
+		// On a phone the sheet would cover the card.
+		if (typeof window !== "undefined" && window.matchMedia("(max-width: 639px)").matches) setOutlineOpen(false);
+	};
 
 	// Feed #4 — region tuning. `isEmpty` in the deps (same as Feed #2):
 	// the settings fetch resolves BEFORE the snapshot creates the renderer,
@@ -1645,7 +1722,7 @@ export function GraphView({
 					isEmpty={isEmpty}
 					query={query}
 					onQuery={setQuery}
-					noMatch={snapshot !== null && visibleIds.size === 0 && (query.trim() !== "" || tagFilterOn)}
+					noMatch={snapshot !== null && visibleIds.size === 0 && (query.trim() !== "" || tagFilterOn || outlineOn)}
 					importing={importing}
 					searchInputRef={searchInputRef}
 					fileInputRef={fileInputRef}
@@ -1653,6 +1730,7 @@ export function GraphView({
 					settings={settings}
 					changeSettings={changeSettings}
 					onOpenChains={() => setChainsOpen(true)}
+					outline={{ open: outlineOpen, onToggle: () => setOutlineOpen((o) => !o), filtered: outlineOn }}
 					tags={{
 						nodes: snapshot?.propositions ?? [],
 						filter: tagFilter,
@@ -1765,6 +1843,20 @@ export function GraphView({
 						<div className="mt-3 text-xs text-muted-foreground">No sessions recorded.</div>
 					)}
 				</div>
+			)}
+			{outlineOpen && !isEmpty && (
+				<GraphOutlinePanel
+					nodes={snapshot?.propositions ?? []}
+					placement={snapshot?.placement}
+					selection={outlineSelection}
+					onSelect={setOutlineSelection}
+					onClear={() => setOutlineSelection(null)}
+					onOpenFact={openFact}
+					onClose={() => setOutlineOpen(false)}
+					onChanged={(graphRevision) =>
+						window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { graphRevision } }))
+					}
+				/>
 			)}
 			<AnkiDialog
 				origin={ankiNodeId ? { kind: "nodes", nodeIds: [ankiNodeId] } : null}

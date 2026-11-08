@@ -33,9 +33,11 @@ import {
 	type DesiredVault,
 	type VaultPort,
 } from "../core/obsidian.ts";
-import type { GraphStore, ReviewStore } from "../core/ports.ts";
+import { placementView } from "../core/placement.ts";
+import type { GraphStore, PlacementStore, ReviewStore } from "../core/ports.ts";
 import type { UserSettings } from "../core/settings.ts";
 import { createVault, VaultError, vaultProblem } from "../store/obsidian-vault.ts";
+import { placementStore } from "../store/placements.ts";
 import { reviewStore } from "../store/review.ts";
 import { graphRevision } from "./graph.ts";
 import { stores } from "./stores.ts";
@@ -59,6 +61,8 @@ export interface ObsidianSyncDeps {
 	readSettings: () => UserSettings | null;
 	graphStore: Pick<GraphStore, "readNodes" | "readChains" | "readSources">;
 	reviewStore: ReviewStore;
+	/** Where each fact sits in the outline — absent keeps the flat Nodes/ layout. */
+	placements?: Pick<PlacementStore, "read">;
 	makeVault: (vaultPath: string) => VaultPort & { appRoot: string };
 	revision: () => number;
 	now: () => Date;
@@ -88,6 +92,7 @@ export function buildDesiredVault(
 	scripts: readonly IllnessScript[],
 	store: Pick<ReviewStore, "assetSize" | "readAsset">,
 	reservedStems: readonly string[],
+	placements?: Pick<PlacementStore, "read">,
 ): DesiredVault {
 	const graph = getGraph(graphStore);
 	const fileSources: Record<string, string> = {};
@@ -98,7 +103,11 @@ export function buildDesiredVault(
 	const stemOfScript = new Map(
 		[...scripts].sort((a, b) => a.slug.localeCompare(b.slug)).map((s) => [s.slug, scriptNames.claim(scriptStem(s.title), s.slug)] as const),
 	);
-	const { notes, names } = buildGraphNotes({ nodes: graph.nodes, chains: graph.chains, fileSources }, [...reservedStems, ...stemOfScript.values()]);
+	const placement = placements ? placementView(placements.read(), graph.nodes.map((n) => n.id)) : undefined;
+	const { notes, names } = buildGraphNotes(
+		{ nodes: graph.nodes, chains: graph.chains, fileSources, ...(placement ? { placement } : {}) },
+		[...reservedStems, ...stemOfScript.values()],
+	);
 	const nodesById = new Map(graph.nodes.map((n) => [n.id, n]));
 
 	const assets: DesiredAsset[] = [];
@@ -170,7 +179,7 @@ export function createObsidianSync(deps: ObsidianSyncDeps) {
 			const scripts = deps.reviewStore.listScripts();
 			const report = syncVault(
 				vault,
-				(reserved) => buildDesiredVault(deps.graphStore, scripts, deps.reviewStore, reserved),
+				(reserved) => buildDesiredVault(deps.graphStore, scripts, deps.reviewStore, reserved, deps.placements),
 				deps.now(),
 			);
 			s.state = "idle";
@@ -232,6 +241,7 @@ export const obsidianSync = createObsidianSync({
 	readSettings: () => stores.settingsStore.readSettings(),
 	graphStore: stores.graphStore,
 	reviewStore,
+	placements: placementStore,
 	makeVault: createVault,
 	revision: graphRevision,
 	now: () => new Date(),

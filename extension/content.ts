@@ -1,4 +1,4 @@
-import { HIDDEN_HELP, answerContainer, canSubmit, clearDraft, conversationIsFresh, fillQuestion, promptEvidence, readAnswerWithSources, requireVisible, questionBox, startConversation, submitQuestion } from "./expert-page";
+import { FocusNeededError, HIDDEN_HELP, LOADING_HELP, SignedOutError, answerContainer, canSubmit, clearDraft, conversationIsFresh, fillQuestion, promptEvidence, readAnswerWithSources, requireVisible, questionBox, startConversation, startScreen, submitQuestion } from "./expert-page";
 import { errorMessage } from "./types";
 import type { Reply } from "./types";
 
@@ -60,14 +60,30 @@ function attachControls() {
     void chrome.runtime.sendMessage({ type: "auto-ready", requestId: pending.requestId }).catch(() => {});
   }
 }
-async function waitUntil(check: () => boolean, ms = 10_000, automatic = false) {
+async function waitUntil(check: () => boolean, ms = 10_000, automatic = false, failure = () => "Expert AI did not show the expected fresh conversation or submit control. Use manual paste-back.") {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (!automatic) requireVisible(document);
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error("Expert AI did not show the expected fresh conversation or submit control. Use manual paste-back.");
+  throw new Error(failure());
+}
+/**
+ * The editor takes text only while its document has focus, and the managed window is opened
+ * unfocused so it never takes over the learner's screen. If the plain fill is ignored for that
+ * reason, borrow focus for the fill alone and give it straight back. The worker checks that this
+ * is the managed automatic question and puts focus back on the window the learner was using.
+ */
+async function fillWithBorrowedFocus(requestId: string, prompt: string) {
+  const granted: Reply | undefined = await chrome.runtime.sendMessage({ type: "focus-fill", requestId });
+  if (!granted?.ok) throw new Error("Step failed: inserting the question text. The composer ignored it because this window is not focused, and focus could not be borrowed for the fill.");
+  try {
+    await waitUntil(() => document.hasFocus(), 3_000, true, () => "Step failed: inserting the question text. This window did not take focus for the fill.");
+    fillQuestion(document, prompt, true);
+  } finally {
+    await chrome.runtime.sendMessage({ type: "restore-focus", requestId }).catch(() => {});
+  }
 }
 /** Expert AI only enables Send in a visible page. Give a just-opened window a moment, then stop without touching anything. */
 async function waitUntilVisible(ms = 10_000) {
@@ -76,6 +92,26 @@ async function waitUntilVisible(ms = 10_000) {
     if (Date.now() >= deadline) throw new Error(HIDDEN_HELP);
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+}
+/**
+ * A page that was just opened (or is redirecting) may not show its composer yet. Wait, bounded,
+ * for the real start screen rather than failing on a half-loaded page. A page that stays on a
+ * sign-in screen is reported as such; a pop-up or access notice is left to questionBox to name.
+ */
+async function waitForStartScreen(ms = 30_000) {
+  const start = Date.now();
+  let signedOutSince: number | undefined;
+  while (Date.now() - start < ms) {
+    const screen = startScreen(document);
+    if (screen === "ready" || screen === "blocked") return;
+    if (screen === "signed-out") {
+      // Sign-in links can show for a moment while the page is still starting.
+      signedOutSince ??= Date.now();
+      if (Date.now() - signedOutSince >= 3_000) throw new SignedOutError();
+    } else signedOutSince = undefined;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  if (document.readyState && document.readyState !== "complete") throw new Error(LOADING_HELP);
 }
 /** Bind an already-sent automatic question found on the page, so its answer can be collected. */
 function adopt(requestId: string, prompt: string) {
@@ -136,15 +172,24 @@ function install() { chrome.runtime.onMessage.addListener((message, sender, resp
     if (!automatic) requireVisible(document);
     else await waitUntilVisible();
     reset();
+    if (automatic) await waitForStartScreen();
     startConversation(document, automatic);
-    await waitUntil(() => conversationIsFresh(document), 10_000, automatic);
+    await waitUntil(() => conversationIsFresh(document), 10_000, automatic, () => "Step failed: starting a new conversation. Expert AI did not show an empty start screen within 10 seconds. Use manual paste-back.");
     // Ask the extension before writing anything. Without its yes, nothing is filled,
     // and the extension can tell that this tab never started.
     const granted: Reply | undefined = await chrome.runtime.sendMessage({ type: "begin", requestId: message.requestId });
     if (!granted?.ok) throw new Error("The extension is no longer waiting for this tab. Click Ask in Expert AI again.");
     filling = true;
-    fillQuestion(document, message.prompt, automatic);
-    await waitUntil(() => canSubmit(document), 10_000, automatic);
+    try { fillQuestion(document, message.prompt, automatic); }
+    catch (error) {
+      if (!automatic || !(error instanceof FocusNeededError)) throw error;
+      await fillWithBorrowedFocus(message.requestId, message.prompt);
+    }
+    await waitUntil(() => canSubmit(document), 10_000, automatic, () => `Step failed: enabling Send. Send stayed disabled ten seconds after the text was inserted (the composer holds ${(questionBox(document).textContent ?? "").trim().length} characters).`);
+    // Record durably that Send is about to be pressed, and press it only if that was accepted.
+    // Without this record the extension can prove, after any interruption, that nothing was sent.
+    const marked: Reply | undefined = await chrome.runtime.sendMessage({ type: "sending", requestId: message.requestId });
+    if (!marked?.ok) throw new Error("The extension is no longer waiting for this tab, so Send was not pressed.");
     submitted = true; // A thrown click/closed port must not trigger an automatic retry.
     submitQuestion(document, automatic);
     pending = { requestId: message.requestId, prompt: message.prompt, automatic };
@@ -173,7 +218,7 @@ function install() { chrome.runtime.onMessage.addListener((message, sender, resp
     controls.style.cssText = "padding:12px;border:2px solid #888;background:Canvas;color:CanvasText;font:14px system-ui";
     controls.textContent = `${message} Open the LearnHarness toolbar for Copy prompt and manual paste-back.`;
     document.body.prepend(controls);
-    respond({ ok: false, submitted, untouched: !filling, error: message, ...(hidden ? { hidden: true } : {}) });
+    respond({ ok: false, submitted, untouched: !filling, error: message, ...(hidden ? { hidden: true } : {}), ...(error instanceof SignedOutError ? { signedOut: true } : {}) });
   }).finally(() => { running = false; });
   return true;
 }); document.addEventListener("visibilitychange", attachControls); }

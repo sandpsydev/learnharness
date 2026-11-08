@@ -31,7 +31,7 @@ export const EXPERT_PAGE = {
   popup: '.ec-disclaimer-modal, .ec-drug-dosing-agreement-modal, .ec-welcome-modal',
 } as const;
 
-export const ACCESS_HELP = "Sign in to Expert AI and use the university network, then retry. If the page layout differs, copy the prompt and use manual paste-back. The question stays queued.";
+export const ACCESS_HELP = "Step failed: reaching the question box. Expert AI is showing its signed-out or no-access notice. Sign in to Expert AI and use the university network, then retry. The question stays queued.";
 
 /** The page cannot enable Send while it is hidden (minimized window or a background tab). Not a sign-in problem. */
 export const HIDDEN_HELP = "The Expert AI page is hidden from the browser (its window is minimized or completely covered), so the site would not enable Send.";
@@ -55,6 +55,23 @@ function popupShown(shell: Element): boolean {
   return [shell, ...shell.querySelectorAll("*")].some((element) =>
     shown(element) && [...element.getClientRects()].some((rect) => rect.width > 0 && rect.height > 0));
 }
+/** Why a matched element cannot be used, in words, so a failure can name what the page actually showed. */
+function whyUnusable(element: Element): string {
+  const view = element.ownerDocument.defaultView;
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    const where = node === element ? "it" : "a parent";
+    if (node.hasAttribute("hidden")) return `${where} has the hidden attribute`;
+    if (node.getAttribute("aria-hidden") === "true") return `${where} is aria-hidden`;
+    if (view?.getComputedStyle) {
+      const style = view.getComputedStyle(node);
+      if (style.display === "none") return `${where} has display:none`;
+      if (style.visibility === "hidden" || style.visibility === "collapse") return `${where} is not visible`;
+    }
+  }
+  if (view?.getComputedStyle && element.getClientRects().length === 0) return "it takes up no space on the page";
+  if (element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true") return "it is disabled";
+  return "it is unusable";
+}
 function enabled(element: Element | null): element is HTMLElement {
   return shown(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true";
 }
@@ -64,9 +81,33 @@ export function requireVisible(doc: Document) {
 export function questionBox(doc: Document): HTMLElement {
   if ([...doc.querySelectorAll(EXPERT_PAGE.access)].some(popupShown)) throw new Error(ACCESS_HELP);
   if ([...doc.querySelectorAll(EXPERT_PAGE.popup)].some(popupShown)) throw new Error("Close the Expert AI pop-up, then retry.");
-  const box = [...doc.querySelectorAll<HTMLElement>(EXPERT_PAGE.question)].find(enabled);
-  if (!box) throw new Error(ACCESS_HELP);
+  const found = [...doc.querySelectorAll<HTMLElement>(EXPERT_PAGE.question)];
+  const box = found.find(enabled);
+  if (!box) {
+    const detail = found.length ? `${found.length} found, none usable: ${[...new Set(found.map(whyUnusable))].join("; ")}` : "none found on the page";
+    throw new Error(`Step failed: finding the question box. It is unavailable (${detail}). If the window is signed out, sign in there; otherwise the page layout may have changed. The question stays queued.`);
+  }
   return box;
+}
+export const SIGNED_OUT_HELP = "Expert AI is showing its sign-in page instead of its start screen.";
+export const LOADING_HELP = "The Expert AI page was still loading its start screen after 30 seconds, so nothing was filled in. Check the window's connection; it will be tried again when you save extension settings.";
+/** The managed page is genuinely on a sign-in screen, as opposed to still loading. */
+export class SignedOutError extends Error {
+  constructor() { super(SIGNED_OUT_HELP); }
+}
+/**
+ * What a freshly opened or redirecting page is showing, from its own DOM.
+ * - `ready`: a usable composer exists.
+ * - `blocked`: a site access notice or pop-up is open; questionBox names which, right away.
+ * - `signed-out`: no composer, and the page offers a sign-in or password field.
+ * - `loading`: none of the above yet.
+ */
+export function startScreen(doc: Document): "ready" | "blocked" | "signed-out" | "loading" {
+  if ([...doc.querySelectorAll(EXPERT_PAGE.access)].some(popupShown) || [...doc.querySelectorAll(EXPERT_PAGE.popup)].some(popupShown)) return "blocked";
+  if ([...doc.querySelectorAll<HTMLElement>(EXPERT_PAGE.question)].some(enabled)) return "ready";
+  const signIn = [...doc.querySelectorAll("a, button, input[type=submit], input[type=password]")].some((node) =>
+    shown(node) && (node.matches("input[type=password]") || /^\s*(sign|log)\s*in\b/i.test(node.textContent ?? (node as HTMLInputElement).value ?? "")));
+  return signIn ? "signed-out" : "loading";
 }
 function submitFor(box: HTMLElement): Element | null {
   // Desktop and mobile have separate forms; never send through the hidden copy.
@@ -82,27 +123,46 @@ export function startConversation(doc: Document, automatic = false) {
   }
   fresh.click();
 }
+/** The composer ignored the text although the page is focused or has no editing commands. */
+export class NotInsertedError extends Error {
+  constructor(detail: string) { super(`Step failed: inserting the question text. The composer did not take it (${detail}). The question stays queued.`); }
+}
+/** The editor only takes text through its own editing commands while the document has focus. */
+export class FocusNeededError extends Error {
+  constructor() { super("Step failed: inserting the question text. The composer ignored it because this window is not focused."); }
+}
+const holds = (box: HTMLElement, prompt: string) => squash(box.textContent).includes(squash(prompt));
 export function fillQuestion(doc: Document, prompt: string, automatic = false) {
   if (!automatic) requireVisible(doc);
   const box = questionBox(doc);
-  if (!conversationIsFresh(doc)) throw new Error("Wait for an empty new conversation before filling the prompt. Use manual paste-back if needed.");
+  if (!conversationIsFresh(doc)) throw new Error("Step failed: starting a new conversation. Wait for an empty new conversation before filling the prompt. Use manual paste-back if needed.");
   const mode = box.closest("form")?.querySelector('[data-e2e="output-mode-menu-trigger"]');
   if (!shown(mode ?? null) || mode?.textContent?.replace(/\s+/g, " ").trim() !== "Standard") {
     throw new Error("Switch Expert AI to Standard, then retry.");
   }
   box.focus();
-  // Use the editor's native editing path so its internal state sees the change.
+  const InputEventClass = doc.defaultView?.InputEvent ?? InputEvent;
+  // Use the editor's native editing path so its internal state sees the change. A command
+  // that "succeeds" is not trusted: the composer must actually hold the text afterwards.
   const selection = doc.getSelection?.();
+  const commands = Boolean(selection && doc.execCommand);
   if (selection && doc.execCommand) {
     const range = doc.createRange();
     range.selectNodeContents(box);
     selection.removeAllRanges();
     selection.addRange(range);
-    if (doc.execCommand("insertText", false, prompt)) return;
+    doc.execCommand("insertText", false, prompt);
+    if (holds(box, prompt)) return;
+    // Editors built on beforeinput take the text this way, with no document focus needed.
+    box.dispatchEvent(new InputEventClass("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: prompt }));
+    if (holds(box, prompt)) return;
+    // Writing the text in directly would leave the editor's own state empty, so Send would
+    // stay disabled. With editing commands available, ask for focus instead.
+    if (!doc.hasFocus()) throw new FocusNeededError();
   }
   box.textContent = prompt;
-  const InputEventClass = doc.defaultView?.InputEvent ?? InputEvent;
   box.dispatchEvent(new InputEventClass("input", { bubbles: true, inputType: "insertText", data: prompt }));
+  if (!holds(box, prompt)) throw new NotInsertedError(commands ? "editing commands and direct input were both ignored" : "direct input was ignored");
 }
 export function submitQuestion(doc: Document, automatic = false) {
   if (!automatic) requireVisible(doc);

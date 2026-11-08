@@ -5,7 +5,7 @@ import { errorMessage } from "./types";
 import type { ActiveQuestion, Answer, Highlight, QueueItem, SessionState } from "./types";
 
 /** `untouched` means it is certain nothing was filled or submitted. */
-export interface PageResult { ok: boolean; submitted: boolean; untouched?: boolean; error?: string; /** The page was hidden from the browser, which is not a sign-in problem. */ hidden?: boolean }
+export interface PageResult { ok: boolean; submitted: boolean; untouched?: boolean; error?: string; /** The page was hidden from the browser, which is not a sign-in problem. */ hidden?: boolean; /** The page is really showing a sign-in screen rather than Expert AI. */ signedOut?: boolean }
 /** What the managed tab proves about a question whose outcome was lost. */
 export interface Evidence { verdict: "sent" | "not-sent" | "busy" | "unknown"; why: string; tabId?: number }
 export interface ControllerPorts {
@@ -21,6 +21,14 @@ export interface ControllerPorts {
   closeAttempt(requestId: string): Promise<boolean>;
   /** Look at the question's tab for proof that its prompt was, or was not, sent. */
   probe?(active: ActiveQuestion): Promise<Evidence>;
+  /**
+   * True when the durable "Send is about to be pressed" marker was never written for this
+   * request, so Send was provably never pressed. In the same step it refuses any later marker,
+   * so the decision cannot be overtaken by a page script that is still running.
+   */
+  fenceUnsent?(requestId: string): Promise<boolean>;
+  /** How many times a queued question was cut off before Send; bounds the automatic retry. */
+  interruptions?: { get(itemId: string): Promise<number>; set(itemId: string, count: number): Promise<void>; reset(): Promise<void> };
 }
 function validateAnswer(answer: Answer) {
   if (!answer || typeof answer.text !== "string" || !answer.text.trim() || answer.text.length > VERIFY_LIMITS.answerChars) {
@@ -51,7 +59,7 @@ export class ExtensionController {
     catch { return "Clipboard unavailable; use Copy in the extension popup."; }
   }
   ask(id?: string) { return this.exclusive(() => this.askOne(id)); }
-  private async askOne(id?: string, automatic = false) {
+  private async askOne(id?: string, automatic = false): Promise<void> {
     const state = await this.ports.read();
     if (state.active?.phase === "starting") {
       // The lock proves no attempt is running now, so a saved "starting" was cut off
@@ -78,7 +86,7 @@ export class ExtensionController {
       throw new Error("No queued question is available. Refresh the queue.");
     }
     if (automatic && verifyPromptProblems(item.prompt).length) throw new Error("The queued prompt failed the identifier check. Rewrite it in LearnHarness before retrying.");
-    const active: ActiveQuestion = { item, requestId: crypto.randomUUID(), phase: "starting", automatic, startedAt: Date.now() };
+    const active: ActiveQuestion = { item, requestId: crypto.randomUUID(), phase: "starting", automatic, startedAt: Date.now(), sendTracked: true };
     await this.ports.write({ ...state, active, notice: automatic ? "Asking Expert AI in its own window…" : "Opening your visible Expert AI tab…" });
     let result: PageResult;
     let tabId: number;
@@ -93,10 +101,14 @@ export class ExtensionController {
       return this.stopCleanly(state, result);
     }
     try { result = await this.ports.submit(tabId, item, active.requestId, automatic); }
-    catch {
+    catch (cut) {
       // A lost message could mean the submit already happened. Only the page
       // never having asked to begin proves otherwise. Never retry the submit.
       const untouched = await this.ports.closeAttempt(active.requestId).catch(() => false);
+      if (!untouched && automatic && await this.neverPressedSend(active)) {
+        await this.interruptedBeforeSend(state, active, `the Expert AI page stopped responding or reloaded while the question was being filled in: ${errorMessage(cut)}`);
+        return this.askOne(undefined, true);
+      }
       result = untouched
         ? { ok: false, submitted: false, untouched: true, error: "The Expert AI tab stopped responding before anything was sent." }
         : { ok: false, submitted: true, error: "The tab did not confirm submission. Check it before manually pasting or retrying." };
@@ -105,6 +117,10 @@ export class ExtensionController {
     // Automatic runs have no learner to finish a half-done attempt. The page set `submitted`
     // only just before pressing Send, so `false` proves nothing was sent; the draft is cleared.
     if (!result.ok && automatic && !result.submitted) return this.stopCleanly(state, result, true);
+    if (!result.ok && automatic && await this.neverPressedSend(active)) {
+      await this.interruptedBeforeSend(state, active, result.error ?? "the page stopped before pressing Send");
+      return this.askOne(undefined, true);
+    }
     if (!result.ok) {
       active.phase = result.submitted ? "uncertain" : "manual";
       active.cause = result.error ?? "Page controls unavailable.";
@@ -115,6 +131,7 @@ export class ExtensionController {
     }
     active.phase = "asked";
     await this.ports.write({ ...state, active });
+    await this.ports.interruptions?.set(item.id, 0).catch(() => {});
     try { await api.asked(item.id); }
     catch (error) {
       active.phase = "uncertain";
@@ -127,7 +144,8 @@ export class ExtensionController {
   /** Nothing reached Expert AI: go back to how things were and leave the item queued. */
   private async stopCleanly(before: SessionState, result: PageResult, filled = false): Promise<never> {
     const what = filled ? "The question was filled in but never submitted (the draft was cleared)" : "Nothing was sent to Expert AI";
-    const next = result.hidden ? "Un-minimize or uncover the separate Expert AI window the extension opened (leave it open), then save extension settings to try again."
+    const next = result.signedOut ? "Sign in in the separate Expert AI window the extension opened (leave it open; the extension never signs in for you), then save extension settings to try again."
+      : result.hidden ? "Un-minimize or uncover the separate Expert AI window the extension opened (leave it open), then save extension settings to try again."
       : filled ? "Fix what the page reported, then save extension settings to try again."
       : "If Expert AI asks you to sign in, sign in there, then click Ask in Expert AI again.";
     const notice = `${what} and the question is still queued. ${next} (${result.error ?? "The page was not ready."})`;
@@ -146,6 +164,7 @@ export class ExtensionController {
   }); }
   release() { return this.exclusive(async () => {
     const state = await this.ports.read();
+    await this.ports.interruptions?.reset().catch(() => {});
     await this.ports.write({ ...state, active: undefined, recovery: undefined, automaticPaused: undefined, notice: "Local question released. Its app queue entry is unchanged; it can be selected again." });
   }); }
   answer(answer: Answer, next: boolean, source?: { tabId: number; requestId: string }) {
@@ -187,8 +206,34 @@ export class ExtensionController {
     return this.exclusive(async () => {
       const state = await this.ports.read();
       const enabled = await save(state);
+      await this.ports.interruptions?.reset().catch(() => {});
       await this.ports.write({ ...state, automaticPaused: undefined, notice: enabled ? "Automatic Expert AI enabled. Uncertain submissions still need manual review." : "Automatic Expert AI is off. Manual controls remain available." });
     });
+  }
+  /**
+   * True when it is proved that Send was never pressed for this attempt. Only attempts that were
+   * made with the durable marker can be proved; an older saved attempt stays uncertain.
+   */
+  private async neverPressedSend(active: ActiveQuestion): Promise<boolean> {
+    if (!active.sendTracked || !this.ports.fenceUnsent) return false;
+    try { return await this.ports.fenceUnsent(active.requestId); } catch { return false; }
+  }
+  /**
+   * An automatic attempt was cut off (extension reload, page reload or redirect) before Send was
+   * pressed. Nothing was sent, so drop the attempt and keep the question queued. The first time
+   * per question this lets automatic mode go on; if the same question is cut off again, stop with
+   * an honest message instead of looping.
+   */
+  private async interruptedBeforeSend(state: SessionState, active: ActiveQuestion, why: string): Promise<void> {
+    const count = (await this.ports.interruptions?.get(active.item.id).catch(() => 0) ?? 0) + 1;
+    await this.ports.interruptions?.set(active.item.id, count).catch(() => {});
+    const tab = active.tabId ?? state.managedTabId;
+    const base: SessionState = { ...state, active: undefined, managedTabId: tab };
+    if (count >= 2) {
+      await this.ports.write(base);
+      throw new Error(`Nothing was sent to Expert AI: this question was cut off before Send was pressed a second time in a row (${why}). It is still queued and will not be asked again until you save extension settings.`);
+    }
+    await this.ports.write({ ...base, notice: `An attempt was cut off before Send was pressed (${why}), so nothing was sent. The question is back in the queue and is being asked again.` });
   }
   /**
    * An automatic question whose outcome was lost (worker cut off, extension reloaded, failed
@@ -198,6 +243,10 @@ export class ExtensionController {
    */
   private async settle(state: SessionState, active: ActiveQuestion): Promise<"collect" | "released" | "waiting"> {
     active.cause ??= "An earlier attempt was cut off before it finished.";
+    if (active.phase !== "asked" && await this.neverPressedSend(active)) {
+      await this.interruptedBeforeSend(state, active, active.cause);
+      return "released";
+    }
     let evidence: Evidence;
     try { evidence = await this.ports.probe?.(active) ?? { verdict: "unknown", why: "No page check is available." }; }
     catch (error) { evidence = { verdict: "unknown", why: errorMessage(error) }; }

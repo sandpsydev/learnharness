@@ -21,7 +21,7 @@ interface Win { id: number; focused: boolean; state: "normal" | "minimized"; tab
 interface Tab { id: number; windowId: number; active: boolean; url: string }
 interface Page { document: Document; log: string[]; listener: Listener }
 
-async function harness(options: { automatic?: boolean } = {}) {
+async function harness(options: { automatic?: boolean; focusOnlyEditor?: boolean } = {}) {
   const id = "local-fixture";
   const base = `chrome-extension://${id}/`;
   const local: { config: Config; attempt?: unknown } = { config: { ...DEFAULT_CONFIG, token: "private-fixture-token", automatic: options.automatic !== false } };
@@ -35,6 +35,7 @@ async function harness(options: { automatic?: boolean } = {}) {
   const created: Array<{ api: string; options: Record<string, unknown> }> = [];
   const visible = (tabId: number) => { const tab = tabs.get(tabId); return Boolean(tab?.active && windows.get(tab.windowId)?.state !== "minimized"); };
   let nextTab = 98, nextWindow = 1;
+  const focusLog: number[] = [];
   let workerListener!: Listener;
 
   async function openPage(tabId: number): Promise<Page> {
@@ -46,10 +47,24 @@ async function harness(options: { automatic?: boolean } = {}) {
     const log: string[] = [];
     const box = document.querySelector<HTMLElement>('[contenteditable="true"]')!;
     const send = box.closest("form")!.querySelector("button[type=submit]")!;
+    // Like the real editor: when focusOnlyEditor is set, only its editing command updates its own
+    // state, the command does nothing while the document lacks focus, and bare input events are ignored.
+    let modelUpdated = false;
     box.addEventListener("input", () => {
+      if (options.focusOnlyEditor && !modelUpdated) return;
       box.setAttribute("data-empty", "false");
       if (document.visibilityState === "visible") send.removeAttribute("disabled");
     });
+    if (options.focusOnlyEditor) {
+      const doc = document as unknown as Record<string, unknown>;
+      doc.getSelection = () => ({ removeAllRanges() {}, addRange() {} });
+      doc.createRange = () => ({ selectNodeContents() {} });
+      doc.execCommand = (_command: string, _ui: boolean, text: string) => {
+        if (!document.hasFocus()) return true; // Reports success, changes nothing.
+        modelUpdated = true; box.textContent = text; box.dispatchEvent(new FixtureEvent("input", { bubbles: true })); modelUpdated = false;
+        return true;
+      };
+    }
     send.addEventListener("click", () => { log.push(`submit:${box.textContent}`); sent.push({ tabId, prompt: box.textContent ?? "" }); });
     // A fresh conversation empties the composer again.
     document.querySelector('button[data-e2e="header-new-conversation"]')!.addEventListener("click", () => {
@@ -125,8 +140,16 @@ async function harness(options: { automatic?: boolean } = {}) {
         return structuredClone({ ...win, tabs: [tab] });
       },
       async get(windowId: number) { const win = windows.get(windowId); if (!win) throw new Error("No window with that id"); return structuredClone(win); },
-      async getLastFocused() { assert.fail("automatic runs must not consult learner focus"); },
-      async update() { assert.fail("automatic runs must not focus or move any window"); },
+      async getLastFocused() {
+        if (!options.focusOnlyEditor) assert.fail("automatic runs must not consult learner focus");
+        return structuredClone([...windows.values()].find((win) => win.focused)!);
+      },
+      async update(windowId: number, value: { focused?: boolean }) {
+        if (!options.focusOnlyEditor) assert.fail("automatic runs must not focus or move any window");
+        focusLog.push(windowId);
+        if (value.focused) for (const win of windows.values()) win.focused = win.id === windowId;
+        return structuredClone(windows.get(windowId)!);
+      },
     },
     scripting: { async executeScript() { throw new Error("unexpected injection"); } },
   };
@@ -155,7 +178,7 @@ async function harness(options: { automatic?: boolean } = {}) {
   }
   const submits = () => sent;
   return {
-    session, queue, windows, tabs, addBackgroundTab: () => addTab(1, false), pages, created, visible, send, until, submits, local,
+    session, focusLog, queue, windows, tabs, addBackgroundTab: () => addTab(1, false), pages, created, visible, send, until, submits, local,
     tick: () => (chrome as unknown as { fire: (alarm: { name: string }) => void }).fire({ name: "expert-ai-queue" }),
     settle: async () => { for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 2)); },
     release: () => send({ type: "release" }),
@@ -240,4 +263,18 @@ test("a minimized managed window stops the attempt cleanly with an accurate mess
   h.windows.get(h.tabs.get(id)!.windowId)!.state = "normal";
   assert.equal((await h.send({ type: "save-config", config: h.local.config })).ok, true);
   await h.until(() => h.submits().length === before + 1);
+});
+
+// The owner's live failure: the managed window is opened unfocused, and the real editor ignores
+// its editing command in a document without focus, so Send never came alive.
+test("an editor that ignores text while its window is unfocused still gets the question, and focus goes straight back", async () => {
+  const h = await harness({ focusOnlyEditor: true });
+  h.tick();
+  await h.until(() => h.session.state?.active?.phase === "asked");
+  assert.deepEqual(h.submits().map((s) => s.prompt), [h.queue[0]!.prompt], "typed and sent exactly once");
+  const managed = h.tabs.get(h.session.state!.managedTabId!)!;
+  assert.deepEqual(h.focusLog, [managed.windowId, 1], "focus was borrowed for the fill, then handed back to the learner's window");
+  assert.equal(h.windows.get(1)!.focused, true);
+  assert.equal(h.windows.get(managed.windowId)!.focused, false);
+  assert.equal(h.session.state!.automaticPaused, undefined);
 });

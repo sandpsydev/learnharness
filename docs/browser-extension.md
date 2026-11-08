@@ -42,8 +42,13 @@ own that the extension opens unfocused (`focused: false`), so it does not take
 over the tab you are reading. It cannot be a background tab: Expert AI only
 enables Send in a page the browser shows, and a background tab is hidden. Leave
 that window open, and do not minimize it or cover it completely with other
-windows; it may sit behind your other windows. Automatic runs never activate or
-focus anything and never choose a learner-owned conversation. Subsequent
+windows; it may sit behind your other windows. Automatic runs never activate a
+tab and never choose a learner-owned conversation. The one exception to
+"never takes focus": Expert AI's editor ignores typed text in a window that
+does not have focus, so if the plain fill is ignored the page asks the worker to
+focus the managed window for the fill alone, and the worker hands focus straight
+back to the window you were using. This only happens for the managed window
+and the current automatic question. Subsequent
 questions reuse that managed window, starting a fresh conversation each time. If
 you close it, the next question opens a new one. A managed page left over from an
 older version as a background tab is moved into a window of its own.
@@ -55,6 +60,14 @@ The completed answer and its source titles/sections are returned through the
 existing app API without a learner click. The app keeps its current notice and
 next-turn hand-off. Collection uses the existing copy-action-bar completion
 signal and sources controls; it does not open individual source cards.
+
+A page that is still loading or redirecting (for example through a sign-in
+address) is given up to 30 seconds to reach Expert AI's start screen before
+anything is filled; the extension only calls the window signed out when the page
+really shows a sign-in screen, and says "still loading" when it simply was not
+ready. Every page failure names the step that failed (finding the question box,
+starting a new conversation, inserting the text, enabling Send), never a generic
+sign-in message.
 
 Sign-in/access screens, open pop-ups, page failures, missing completion after
 two minutes, and answer-delivery failures pause automatic mode. If the app is
@@ -72,10 +85,31 @@ extension never signs in, dismisses a site pop-up, or resubmits a question that
 may have been sent. Fix the page or connection yourself, then open extension
 Settings and save with automatic mode on to resume.
 
+### Recording Send before it is pressed
+
+Just before the page clicks Send it asks the worker to write a durable marker
+for that request (`sending`, kept in `chrome.storage.local` beside the attempt).
+The click happens only if the marker was accepted. So an attempt with no marker
+provably never pressed Send, however it was cut off: an extension reload or
+browser restart, a page reload or redirect that replaces the content script, or
+a worker restart. For an automatic question the worker then settles it itself
+without consulting the page: the attempt is dropped, the question stays queued
+and automatic mode asks it again. In the same step the worker refuses any later
+marker for that request, so a page script that outlived the decision cannot
+press Send for a question that already went back to the queue.
+
+This retry is allowed once per question. If the same question is cut off before
+Send a second time, automatic mode pauses with a message saying nothing was sent
+and why; saving settings or releasing resets the count. If a marker exists, the
+click may or may not have happened, and the rules below apply unchanged. An
+attempt saved by an older version of the extension has no way to show it was
+unsent, so it also keeps the uncertain pause until you release it.
+
 ### When an attempt's outcome is lost
 
 A worker cut off mid-attempt, a browser restart or an extension reload can leave
-an automatic question whose outcome is unknown. The next automatic check looks
+an automatic question whose outcome is unknown. If its Send marker was never
+written, it is settled without the page, as above. Otherwise the next automatic check looks
 at its managed tab instead of pausing straight away. If the tab was loaded
 before the extension reloaded, the worker adds its own `content.js` to that tab
 once, using the `scripting` permission on Expert AI pages only. The page then

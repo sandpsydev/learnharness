@@ -40,10 +40,55 @@ async function write(state: SessionState) {
   // binding. A crash between writes can pause unnecessarily, but cannot resend.
   if (state.active) await chrome.storage.local.set({ attempt: state.active });
   await chrome.storage.session.set({ state });
-  if (!state.active) await chrome.storage.local.set({ attempt: null });
+  if (!state.active) await chrome.storage.local.set({ attempt: null, sendMark: null });
   await chrome.action.setBadgeText({ text: state.automaticPaused ? "!" : state.notice ? "•" : "" });
   await chrome.action.setTitle({ title: state.automaticPaused ? `Automatic Expert AI paused: ${state.automaticPaused}` : state.notice ?? "LearnHarness Medical" });
 }
+/**
+ * The durable "Send is about to be pressed" marker. The page asks for it just before it clicks
+ * Send, and the click only happens if this answers yes. So an attempt with no marker provably
+ * never pressed Send, however it was cut off (extension reload, page reload or redirect, worker
+ * restart). `fenceUnsent` is the other half: it decides "never sent" and, in the same step,
+ * refuses any marker for that request afterwards, so a page script that outlived the decision
+ * can no longer press Send for a question that has already gone back to the queue.
+ */
+interface SendMark { requestId: string; state: "pressing" | "fenced" }
+let marking: Promise<unknown> = Promise.resolve();
+function serialized<T>(action: () => Promise<T>): Promise<T> {
+  const run = marking.then(action, action);
+  marking = run.catch(() => {});
+  return run;
+}
+const currentMark = async () => (await chrome.storage.local.get<{ sendMark?: SendMark | null }>("sendMark")).sendMark ?? undefined;
+const NO_LONGER_WAITING = "This question is no longer waiting for Expert AI, so Send was not pressed. Nothing was sent.";
+function markSending(requestId: string, tabId: number) {
+  return serialized(async () => {
+    await ready;
+    const attempt = (await chrome.storage.local.get<{ attempt?: ActiveQuestion | null }>("attempt")).attempt;
+    const mark = await currentMark();
+    if (!attempt || attempt.requestId !== requestId || attempt.tabId !== tabId || (mark?.requestId === requestId && mark.state === "fenced")) throw new Error(NO_LONGER_WAITING);
+    await chrome.storage.local.set({ sendMark: { requestId, state: "pressing" } satisfies SendMark });
+  });
+}
+function fenceUnsent(requestId: string) {
+  return serialized(async () => {
+    await ready;
+    const mark = await currentMark();
+    if (mark?.requestId === requestId && mark.state === "pressing") return false;
+    await chrome.storage.local.set({ sendMark: { requestId, state: "fenced" } satisfies SendMark });
+    return true;
+  });
+}
+/** How many times each queued question was cut off before Send, so a repeating problem cannot loop. */
+const interruptions = {
+  async get(itemId: string) { return (await chrome.storage.local.get<{ interruptions?: Record<string, number> | null }>("interruptions")).interruptions?.[itemId] ?? 0; },
+  async set(itemId: string, count: number) {
+    const all = { ...(await chrome.storage.local.get<{ interruptions?: Record<string, number> | null }>("interruptions")).interruptions };
+    if (count > 0) all[itemId] = count; else delete all[itemId];
+    await chrome.storage.local.set({ interruptions: all });
+  },
+  async reset() { await chrome.storage.local.set({ interruptions: null }); },
+};
 let clipboardCreating: Promise<void> | undefined;
 async function clipboard(text: string) {
   if (!(await chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT] })).length) {
@@ -67,7 +112,8 @@ async function focusExpert(automatic = false) {
       try { tab = await chrome.tabs.get(state.managedTabId); } catch { /* Managed tab was closed. */ }
     }
     if (tab?.id !== undefined) {
-      if (!isExpertUrl(tab.url ?? "")) throw new Error("The managed Expert AI tab is on a sign-in or different page. Sign in there, then retry.");
+      // A page that is mid-redirect may be passing through another address; submit() waits for it.
+      if (!isExpertUrl(tab.url ?? "") && tab.status !== "loading") throw new Error("The managed Expert AI tab is on a sign-in or different page. Sign in there, then retry.");
       if (tab.windowId === state.managedWindowId) return tab.id;
       // A managed page from before it had its own window is a hidden background tab; give it one.
       const win = await chrome.windows.create({ tabId: tab.id, ...MANAGED_WINDOW });
@@ -95,23 +141,36 @@ async function focusExpert(automatic = false) {
 }
 const attempts = new Attempts();
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** How long a just-opened or redirecting managed page may take to reach Expert AI with its script running. */
+const PAGE_READY_MS = 30_000;
+const hostOf = (value: string) => { try { return new URL(value).host; } catch { return "another site"; } };
 async function submit(tabId: number, item: QueueItem, requestId: string, automatic = false): Promise<PageResult> {
   // Wait for the tab's content script. Never retry a submit.
   attempts.open(requestId, tabId);
   let connected = false;
-  for (let attempt = 0; attempt < 30; attempt++) {
+  let elsewhere: string | undefined;
+  const deadline = Date.now() + PAGE_READY_MS;
+  for (let attempt = 0; attempt === 0 || Date.now() < deadline; attempt++) {
     const tab = await chrome.tabs.get(tabId);
     const win = await chrome.windows.get(tab.windowId);
     // Expert AI will not enable Send in a hidden page. Say so rather than blaming the sign-in.
     if (automatic && win.state === "minimized") return { ok: false, submitted: false, untouched: true, hidden: true, error: HIDDEN_HELP };
     if (!automatic && (!tab.active || !win.focused)) return { ok: false, submitted: false, untouched: true, error: "Keep the Expert AI tab visible and its window focused, then retry." };
-    // A tab that is still opening has no committed URL yet; keep waiting for it.
-    if (tab.url && !isExpertUrl(tab.url)) return { ok: false, submitted: false, untouched: true, error: "The tab is not on Expert AI, which can happen at a sign-in screen." };
-    try { connected = (await chrome.tabs.sendMessage(tabId, { type: "lh-ready" }, { frameId: 0 }))?.ok === true; } catch { /* Page still loading. */ }
+    elsewhere = undefined;
+    if (tab.url && !isExpertUrl(tab.url)) {
+      // A learner's own tab is never waited on. A managed page can pass through other addresses
+      // while it redirects, so it gets the same bounded wait as a page that is still loading.
+      if (!automatic) return { ok: false, submitted: false, untouched: true, error: "The tab is not on Expert AI, which can happen at a sign-in screen." };
+      elsewhere = hostOf(tab.url);
+    } else {
+      // A tab that is still opening has no committed URL yet; keep waiting for it.
+      try { connected = (await chrome.tabs.sendMessage(tabId, { type: "lh-ready" }, { frameId: 0 }))?.ok === true; } catch { /* Page still loading. */ }
+    }
     if (connected) break;
     await delay(400);
   }
-  if (!connected) return { ok: false, submitted: false, untouched: true, error: "The Expert AI tab is not ready. If it asks you to sign in, sign in there. Otherwise reload it or use manual paste-back." };
+  if (!connected && elsewhere) return { ok: false, submitted: false, untouched: true, signedOut: true, error: `The Expert AI window stayed on ${elsewhere}, which is a sign-in or other page, for ${PAGE_READY_MS / 1000} seconds.` };
+  if (!connected) return { ok: false, submitted: false, untouched: true, error: `The Expert AI window did not become ready within ${PAGE_READY_MS / 1000} seconds. If it asks you to sign in, sign in there. Otherwise reload it or use manual paste-back.` };
   return await chrome.tabs.sendMessage(tabId, { type: "lh-ask", prompt: item.prompt, requestId, automatic }, { frameId: 0 });
 }
 async function probe(active: ActiveQuestion): Promise<Evidence> {
@@ -133,7 +192,7 @@ async function probe(active: ActiveQuestion): Promise<Evidence> {
   if (!reply?.ok || !reply.verdict) return { verdict: "unknown", why: reply?.error ?? "Its tab gave no answer" };
   return { verdict: reply.verdict, why: reply.why ?? "", tabId };
 }
-const controller = new ExtensionController({ probe, api: async () => new VerifyApi(await config()), read, write, focusExpert, submit, clipboard,
+const controller = new ExtensionController({ probe, fenceUnsent, interruptions, api: async () => new VerifyApi(await config()), read, write, focusExpert, submit, clipboard,
   completed: async (active) => {
     if (active.tabId !== undefined) await chrome.tabs.sendMessage(active.tabId, { type: "lh-returned", requestId: active.requestId }, { frameId: 0 });
   },
@@ -145,6 +204,8 @@ const controller = new ExtensionController({ probe, api: async () => new VerifyA
     if (!reply?.ok) throw new Error(reply?.error ?? "The managed Expert AI page did not respond. Use manual return.");
     return reply.answer;
   }, closeAttempt: async (requestId) => attempts.close(requestId) });
+/** The learner's window that had focus when the managed window borrowed it for a fill. */
+let borrowedFrom: number | undefined;
 const extensionPages = new Set([chrome.runtime.getURL("popup.html"), chrome.runtime.getURL("options.html")]);
 async function handle(message: Request, sender: chrome.runtime.MessageSender) {
   if (sender.id !== chrome.runtime.id) throw new Error("Unknown sender.");
@@ -155,6 +216,27 @@ async function handle(message: Request, sender: chrome.runtime.MessageSender) {
       const state = await read();
       if (!sender.tab?.id || sender.frameId !== 0 || !isExpertUrl(sender.url ?? "") || !state.active?.automatic || state.active.requestId !== message.requestId || state.active.tabId !== sender.tab.id || state.managedTabId !== sender.tab.id) throw new Error("This is not the current automatic question.");
       void automaticTick().catch(notice);
+      return null;
+    }
+    if (message.type === "sending") {
+      if (!sender.tab?.id || sender.frameId !== 0 || !isExpertUrl(sender.url ?? "") || typeof message.requestId !== "string") throw new Error("This operation is only available in the extension popup.");
+      await markSending(message.requestId, sender.tab.id);
+      return null;
+    }
+    if (message.type === "focus-fill" || message.type === "restore-focus") {
+      const state = await read();
+      if (!sender.tab?.id || sender.frameId !== 0 || !isExpertUrl(sender.url ?? "") || !state.active?.automatic || state.active.requestId !== message.requestId || state.active.tabId !== sender.tab.id || state.managedTabId !== sender.tab.id) throw new Error("This is not the current automatic question.");
+      if (message.type === "focus-fill") {
+        const managed = (await chrome.tabs.get(sender.tab.id)).windowId;
+        // Remember who had focus so it can be handed back; never keep it.
+        const before = await chrome.windows.getLastFocused();
+        borrowedFrom = before.id !== undefined && before.id !== managed ? before.id : undefined;
+        await chrome.windows.update(managed, { focused: true });
+      } else if (borrowedFrom !== undefined) {
+        const previous = borrowedFrom;
+        borrowedFrom = undefined;
+        await chrome.windows.update(previous, { focused: true }).catch(() => {});
+      }
       return null;
     }
     if (message.type === "begin") {

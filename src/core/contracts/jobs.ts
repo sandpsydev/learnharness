@@ -12,7 +12,7 @@ import { newHandoffMessage } from "../native-messages.ts";
 
 // ─── Async sub-agent jobs (vision §2.5; plan.md Wave 0 protocol) ────────────
 
-export type JobKind = "research" | "demo" | "visual" | "pdf";
+export type JobKind = "research" | "demo" | "visual" | "pdf" | "figure";
 export type JobStatus = "running" | "done" | "error";
 
 export interface JobRecord {
@@ -140,7 +140,7 @@ export function accumulateJobUsage(
  * THE ASYNC PROTOCOL — "ack now, steer later" (the pi sub-agents model,
  * vision §2.5):
  *
- *  1. Job tools (research / demo / visual / pdf) are SERVER-EXECUTED. The model
+ *  1. Job tools (research / demo / visual / pdf / figure) are SERVER-EXECUTED. The model
  *     calls one MID-TURN; execute creates the job record, fires the
  *     background runner, and resolves IMMEDIATELY with an acknowledgement
  *     ("dispatched — continue your turn"). The teacher's turn does NOT end
@@ -252,6 +252,62 @@ export interface PdfResult {
 	pagesConsulted: number[];
 }
 
+/** The figure finder (medical fork): looks for a REAL figure — the learner's own
+ *  lecture slide, Radiopaedia, an open atlas or open-access article — and
+ *  returns the picture with its credit, or links when none can be shown.
+ *  Never a drawing. The finder sees only these two fields. */
+export interface FigureToolInput {
+	/** What the picture must show, specifically: "left-sided pneumothorax on an erect chest X-ray". */
+	concept: string;
+	/** What kind of picture, to aim the search: chest X-ray, CT, histology, skin, fundus, ECG, anatomy… */
+	modality?: string;
+	/** Why the lesson needs it — focuses the choice. One sentence. */
+	context?: string;
+}
+
+/** A page worth opening, for when no image can be shown. */
+export interface FigureLink {
+	title: string;
+	url: string;
+	/** The source's name, e.g. "Radiopaedia", "NEJM Images in Clinical Medicine". */
+	source: string;
+	/** One line: what to look at on that page. */
+	note: string;
+}
+
+/** One fetched or rendered picture, cached on disk for the session. */
+export interface FigureImage {
+	/** The cached file's name (served at /api/figures/<chatId>/<file>). */
+	file: string;
+	mime: string;
+	tier: "slides" | "radiopaedia" | "specialty" | "commons" | "open-journal";
+	/** Where it came from, by name: "Radiopaedia", "Wikimedia Commons", "Your lecture slides". */
+	source: string;
+	/** The page the image sits on (for a lecture slide: absent). */
+	sourceUrl?: string;
+	/** Title of the case, article, file — or for a lecture slide: "<lecture>, slide N". */
+	title: string;
+	/** "Author, via Source". */
+	credit: string;
+	/** "CC BY-SA 4.0", "Public domain", or "Your lecture slides". */
+	licence: string;
+	licenceUrl?: string;
+}
+
+export interface FigureResult {
+	concept: string;
+	/** image = shown in the lesson; link = could not show an image, links instead; none = nothing usable found. */
+	outcome: "image" | "link" | "none";
+	image?: FigureImage;
+	/** Caption for the card: what the image shows. */
+	caption: string;
+	/** Where to look: the one feature the learner should find. */
+	keyFeature: string;
+	links: FigureLink[];
+	/** Model-facing summary. Failure shape: /^Figure failed:/i. */
+	brief: string;
+}
+
 // ─── Sub-agent steer messages (THE ASYNC PROTOCOL §3–4) ─────────────────────
 //
 // Wave B (owner-approved 2026-09-26): steers are NATIVE record messages —
@@ -277,7 +333,7 @@ export interface SubagentResultMeta {
 /** The data-subagent-artifact part payload: what the UI renders. */
 export interface SubagentArtifactData {
 	kind: JobKind;
-	result: ResearchResult | DemoResult | VisualResult | PdfResult;
+	result: ResearchResult | DemoResult | VisualResult | PdfResult | FigureResult;
 	/** The learner's pinned UI state (invert switch) riding the record. */
 	ui?: { inverted?: boolean };
 }
@@ -285,7 +341,7 @@ export interface SubagentArtifactData {
 /** A result steer's marker details: the UI's meta + artifact in one
  *  payload (the projection splits it into metadata + data part). */
 export interface SteerDetails extends SubagentResultMeta {
-	result: ResearchResult | DemoResult | VisualResult | PdfResult;
+	result: ResearchResult | DemoResult | VisualResult | PdfResult | FigureResult;
 	/** LEARNER UI state pinned onto the artifact (owner, 2026-10-07): the
 	 *  invert switch's position, persisted so navigating away and back (or
 	 *  restarting) keeps it. A VIEW preference — never enters the teacher's
@@ -316,7 +372,7 @@ export type SteerMessage = LhMarkerMessage;
 /** Whether a result is the failure shape (html/svg empty, failure brief). */
 export function isSubagentFailure(
 	kind: JobKind,
-	result: ResearchResult | DemoResult | VisualResult | PdfResult,
+	result: ResearchResult | DemoResult | VisualResult | PdfResult | FigureResult,
 ): boolean {
 	if (kind === "research") {
 		const r = result as ResearchResult;
@@ -330,12 +386,16 @@ export function isSubagentFailure(
 		const r = result as PdfResult;
 		return /^PDF failed:/i.test(r.brief);
 	}
+	if (kind === "figure") {
+		const r = result as FigureResult;
+		return /^Figure failed:/i.test(r.brief);
+	}
 	const r = result as VisualResult;
 	return typeof r.svg !== "string" || r.svg.length === 0;
 }
 
 /** The model-facing text of a steer: what the result IS, what to do with it. */
-function steerText(kind: JobKind, result: ResearchResult | DemoResult | VisualResult | PdfResult): string {
+function steerText(kind: JobKind, result: ResearchResult | DemoResult | VisualResult | PdfResult | FigureResult): string {
 	if (isSubagentFailure(kind, result)) {
 		if (kind === "research")
 			return `${(result as ResearchResult).brief}\n\nContinue with what you can establish and flag the uncertainty to the learner.`;
@@ -345,12 +405,15 @@ function steerText(kind: JobKind, result: ResearchResult | DemoResult | VisualRe
 			}. Fall back to explaining in prose; if the brief was the problem, re-call demo with a tighter one.`;
 		if (kind === "pdf")
 			return `${(result as PdfResult).brief}\n\nContinue with what you can establish from the session and flag the gap to the learner.`;
+		if (kind === "figure")
+			return `${(result as FigureResult).brief}\n\nNo picture is coming. Describe it in words and point the learner to their atlas or imaging; do not draw it.`;
 		return `The figure could not be made: ${(result as VisualResult).notes ?? "unknown reason"}. Fall back to prose or mermaid, or re-call visual with a tighter brief.`;
 	}
 	if (kind === "research")
 		return `Research complete — the researcher's full brief follows. Weave it into the lesson and cite its sources when you use its findings:\n\n${(result as ResearchResult).brief}`;
 	if (kind === "pdf")
 		return `PDF reading complete — the reader's brief on "${(result as PdfResult).path}" follows, with page citations. Weave it into the lesson and cite pages when you use it:\n\n${(result as PdfResult).brief}`;
+	if (kind === "figure") return (result as FigureResult).brief;
 	if (kind === "demo")
 		return `The demo "${(result as DemoResult).title}" is built, headlessly tested, and rendered in the lesson. Builder notes: ${
 			(result as DemoResult).notes ?? "(none)"
@@ -367,7 +430,7 @@ function steerText(kind: JobKind, result: ResearchResult | DemoResult | VisualRe
  */
 export function buildSubagentSteer(
 	job: Pick<JobRecord, "id" | "kind" | "toolCallId">,
-	result: ResearchResult | DemoResult | VisualResult | PdfResult,
+	result: ResearchResult | DemoResult | VisualResult | PdfResult | FigureResult,
 ): SteerMessage {
 	return {
 		id: `steer_${job.id}`,
@@ -412,6 +475,8 @@ function abortText(kind: JobKind): string {
 		return "The demo job was aborted by the learner — no demo is coming. Acknowledge it in one line and teach the topic in prose instead (a re-dispatch is fine if the learner wants it).";
 	if (kind === "pdf")
 		return "The PDF reading job was aborted by the learner — no brief is coming. Acknowledge it in one line and continue without it (a re-dispatch is fine if the learner wants it).";
+	if (kind === "figure")
+		return "The figure search was aborted by the learner — no picture is coming. Acknowledge it in one line and teach without it, in words (a re-dispatch is fine if the learner wants it).";
 	return "The figure job was aborted by the learner — no figure is coming. Acknowledge it in one line and teach without it (a re-dispatch is fine if the learner wants it).";
 }
 

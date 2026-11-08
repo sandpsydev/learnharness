@@ -18,6 +18,7 @@ export * from "./commit-positions.ts";
 export * from "./jobs.ts";
 export * from "./library.ts";
 export * from "./attachments.ts";
+export * from "./figures.ts";
 export * from "./stores.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
 // The settings record + prompt overrides (settings-storage wave, 2026-09-19).

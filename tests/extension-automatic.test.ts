@@ -32,6 +32,7 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
   let injected = 0;
   const probes: string[] = [];
   let askFails: string | undefined;
+  let pageDies = 0; // How many lh-ask calls lose their page after the fill started but before Send.
   const returns: Answer[] = [];
   const area = (data: object) => ({
     async setAccessLevel() {},
@@ -76,6 +77,12 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
           return { ok: true, ...(completed ? { answer } : {}) };
         }
         assert.equal(message.type, "lh-ask");
+        if (pageDies > 0) {
+          pageDies--;
+          const granted = await send({ type: "begin", requestId: message.requestId }, { id, frameId: 0, url: DEFAULT_CONFIG.expertUrl, tab: { id: tabId } });
+          assert.equal(granted.ok, true);
+          throw new Error("The message port closed before a response was received.");
+        }
         if (askFails) {
           // The page began filling, then failed before pressing Send, as Chrome did in the background.
           const granted = await send({ type: "begin", requestId: message.requestId }, { id, frameId: 0, url: DEFAULT_CONFIG.expertUrl, tab: { id: tabId } });
@@ -85,6 +92,8 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
         if (signedOut) return { ok: false, submitted: false, untouched: true, error: "Sign in to Expert AI yourself." };
         const granted = await send({ type: "begin", requestId: message.requestId }, { id, frameId: 0, url: DEFAULT_CONFIG.expertUrl, tab: { id: tabId } });
         assert.equal(granted.ok, true);
+        // Like the real page, record durably that Send is about to be pressed, then press it.
+        assert.equal((await send({ type: "sending", requestId: message.requestId }, { id, frameId: 0, url: DEFAULT_CONFIG.expertUrl, tab: { id: tabId } })).ok, true);
         submissions.push({ tabId, prompt: message.prompt, requestId: message.requestId, automatic: message.automatic });
         bound = message.requestId;
         if (options.uncertain) throw new Error("Lost submit acknowledgement");
@@ -156,10 +165,12 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
     probeSays: (verdict: typeof probeVerdict) => { probeVerdict = verdict; },
     needInjection: () => { needsInjection = true; },
     pageFails: (error: string | undefined) => { askFails = error; },
+    pageDiesBeforeSend: (times: number) => { pageDies = times; },
     /** The state an extension reload leaves: local storage keeps the guard, session storage is gone. */
-    leftBehind: (phase: "starting" | "manual" | "uncertain" | "asked", cause?: string) => {
+    leftBehind: (phase: "starting" | "manual" | "uncertain" | "asked", cause?: string, send?: { tracked?: boolean; marked?: boolean }) => {
       tabs.set(99, { id: 99, windowId: 2, active: true, url: DEFAULT_CONFIG.expertUrl });
-      local.attempt = { item: queue[0], requestId: "old-request", tabId: 99, automatic: true, startedAt: Date.now() - 600_000, phase, ...(cause ? { cause } : {}) };
+      local.attempt = { item: queue[0], requestId: "old-request", tabId: 99, automatic: true, startedAt: Date.now() - 600_000, phase, ...(cause ? { cause } : {}), ...(send?.tracked ? { sendTracked: true } : {}) };
+      if (send?.marked) (local as Record<string, unknown>).sendMark = { requestId: "old-request", state: "pressing" };
       session.state = undefined;
     },
   };
@@ -424,4 +435,88 @@ test("a manual question left behind by a restart still pauses automation and tru
   h.tick(); await new Promise((r) => setImmediate(r));
   assert.deepEqual(h.probes, [], "a learner's manual question is never probed or released automatically");
   assert.equal(h.submissions.length, 0);
+});
+
+// Interrupted attempts: whether Send was pressed is known from the durable marker, not guessed from the page.
+test("an extension reload mid-fill, before Send was ever recorded, re-asks the question by itself", async () => {
+  for (const phase of ["starting", "uncertain"] as const) {
+    const h = await fixture();
+    h.leftBehind(phase, undefined, { tracked: true });
+    h.probeSays("unknown"); // The reloaded page shows nothing useful, exactly as the owner saw.
+    await h.boot();
+    h.tick();
+    await h.until(() => h.session.state?.active?.requestId !== undefined && h.session.state.active.requestId !== "old-request" && h.session.state.active.phase === "asked");
+    assert.equal(h.session.state!.automaticPaused, undefined, `${phase}: no stuck pause`);
+    assert.equal(h.submissions.length, 1, "asked once, by the new attempt");
+    assert.deepEqual(h.probes, [], "the marker settles it; the page is not consulted");
+  }
+});
+
+test("a late Send marker from the cut-off attempt is refused once the question went back to the queue", async () => {
+  const h = await fixture();
+  h.leftBehind("starting", undefined, { tracked: true });
+  await h.boot();
+  const old = { id: "local-fixture", frameId: 0, url: DEFAULT_CONFIG.expertUrl, tab: { id: 99 } };
+  h.tick();
+  await h.until(() => h.session.state?.active?.phase === "asked");
+  assert.equal((await h.send({ type: "sending", requestId: "old-request" }, old)).ok, false, "the old page script can no longer press Send");
+  assert.equal(h.submissions.length, 1);
+});
+
+test("an interruption after the Send marker still pauses as uncertain and never asks again", async () => {
+  for (const phase of ["starting", "uncertain"] as const) {
+    const h = await fixture();
+    h.leftBehind(phase, "The tab did not confirm submission.", { tracked: true, marked: true });
+    h.probeSays("unknown");
+    await h.boot();
+    h.tick();
+    await h.until(() => Boolean(h.session.state?.automaticPaused));
+    assert.match(h.session.state!.automaticPaused!, /uncertain.*could not prove whether it was sent/s);
+    assert.equal(h.session.state!.active!.phase, "uncertain");
+    assert.equal(h.submissions.length, 0);
+    assert.deepEqual(h.probes, ["unknown"], "with the marker the page is asked for evidence, as before");
+  }
+});
+
+test("an attempt saved by a version without the Send marker is not assumed unsent", async () => {
+  const h = await fixture();
+  h.leftBehind("starting"); // No sendTracked flag: nothing can prove it.
+  h.probeSays("unknown");
+  await h.boot();
+  h.tick();
+  await h.until(() => Boolean(h.session.state?.automaticPaused));
+  assert.equal(h.submissions.length, 0);
+});
+
+test("a page reloaded or redirected before Send is retried once by itself", async () => {
+  const h = await fixture();
+  h.pageDiesBeforeSend(1);
+  h.tick();
+  await h.until(() => h.session.state?.active?.phase === "asked");
+  assert.equal(h.session.state!.automaticPaused, undefined);
+  assert.equal(h.submissions.length, 1, "only the retry reached Send");
+  assert.equal(h.queue[0]!.status, "asked");
+  assert.equal(h.calls.filter((c) => c === "queue/a/asked").length, 1);
+  // The retry budget is spent per question: finishing it clears the count.
+  h.ready(); await h.send({ type: "auto-ready", requestId: h.session.state!.active!.requestId }, { id: "local-fixture", frameId: 0, url: DEFAULT_CONFIG.expertUrl, tab: { id: 99 } });
+  await h.until(() => h.returns.length === 1);
+  assert.deepEqual((h.local as unknown as { interruptions: object }).interruptions, {});
+});
+
+test("the same question cut off before Send twice pauses with a specific message and does not loop", async () => {
+  const h = await fixture();
+  h.pageDiesBeforeSend(2);
+  h.tick();
+  await h.until(() => Boolean(h.session.state?.automaticPaused));
+  assert.match(h.session.state!.automaticPaused!, /Nothing was sent.*second time in a row.*stopped responding or reloaded/s);
+  assert.equal(h.session.state!.active, undefined, "nothing to release");
+  assert.equal(h.local.attempt, null);
+  assert.equal(h.queue[0]!.status, "queued");
+  assert.equal(h.submissions.length, 0);
+  h.tick(); await new Promise((r) => setImmediate(r));
+  assert.equal(h.submissions.length, 0, "paused means no further attempts");
+  // Saving settings is the owner's go-ahead and resets the budget.
+  await h.send({ type: "save-config", config: h.local.config });
+  await h.until(() => h.session.state?.active?.phase === "asked");
+  assert.equal(h.submissions.length, 1);
 });

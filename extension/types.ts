@@ -13,6 +13,12 @@ export interface ActiveQuestion {
   automatic?: boolean; startedAt?: number;
   /** First, specific reason the attempt stopped being clean. Kept so later generic notices cannot hide it. */
   cause?: string;
+  /**
+   * Set on attempts made by a version that records a durable "Send is about to be pressed"
+   * marker before clicking. Only such an attempt can be proved never sent; one saved by an
+   * older version cannot, and keeps the uncertain pause.
+   */
+  sendTracked?: boolean;
   phase: "starting" | "asked" | "uncertain" | "manual";
 }
 export interface SessionState {
@@ -27,6 +33,8 @@ export type Request =
   | { type: "release" } | { type: "copy"; text: string }
   | { type: "answer"; answer: Answer; next: boolean; requestId?: string }
   | { type: "begin"; requestId: string }
+  | { type: "sending"; requestId: string }
+  | { type: "focus-fill"; requestId: string } | { type: "restore-focus"; requestId: string }
   | { type: "auto-ready"; requestId: string }
   | { type: "highlight"; highlight: Highlight };
 export type Reply<T = unknown> = { ok: true; data: T } | { ok: false; error: string };

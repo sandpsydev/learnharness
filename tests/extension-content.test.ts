@@ -17,7 +17,7 @@ type Listener = (message: unknown, sender: unknown, respond: (reply: unknown) =>
 type PageReply = { ok: boolean; submitted: boolean; untouched?: boolean; error?: string };
 const bundled = build({ entryPoints: [new URL("../extension/content.ts", import.meta.url).pathname], bundle: true, write: false, format: "iife", platform: "browser" });
 
-async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverSendable?: boolean; background?: boolean; unfocused?: boolean; visibleAfterReads?: number; hideAfterBegin?: boolean; sendNeedsVisible?: boolean; automatic?: boolean; begin?: (request: unknown) => unknown } = {}) {
+async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverSendable?: boolean; background?: boolean; unfocused?: boolean; visibleAfterReads?: number; hideAfterBegin?: boolean; sending?: (request: unknown) => unknown; composerAfterMs?: number; signInLink?: boolean; loading?: boolean; ignoresText?: boolean; sendNeedsVisible?: boolean; automatic?: boolean; begin?: (request: unknown) => unknown } = {}) {
   const { document, Event: FixtureEvent } = parseHTML(fixture);
   // A hidden page (background tab, minimized window) can come back; a merely unfocused one is still visible.
   let reads = 0;
@@ -40,6 +40,12 @@ async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverS
   box.addEventListener("input", () => log.push("fill"));
   box.closest("form")!.querySelector("button[type=submit]")!.addEventListener("click", () => log.push("submit"));
   if (options.signedOut) document.querySelectorAll('[contenteditable="true"]').forEach((node) => node.remove());
+  // A page still starting up: no composer yet, then it appears (a redirect or sign-in landing passes by).
+  const detached: Array<{ parent: Element; node: Element }> = [];
+  if (options.composerAfterMs !== undefined) document.querySelectorAll('[data-e2e="desktop-send-input-editor"]').forEach((node) => { detached.push({ parent: node.parentElement!, node }); node.remove(); });
+  if (options.signInLink) document.body.insertAdjacentHTML("afterbegin", '<a href="/login">Sign in</a>');
+  if (options.loading) Object.defineProperty(document, "readyState", { get: () => "loading" });
+  if (options.ignoresText) { const doc = document as unknown as Record<string, unknown>; doc.getSelection = () => ({ removeAllRanges() {}, addRange() {} }); doc.createRange = () => ({ selectNodeContents() {} }); doc.execCommand = () => true; box.addEventListener("beforeinput", () => {}); }
   let listener!: Listener;
   let mutated!: () => void;
   const timers = new Map<number, () => void>();
@@ -54,13 +60,19 @@ async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverS
     },
     setTimeout(callback: () => void, ms: number) {
       if (ms === 120_000) { timers.set(1, callback); return 1; }
-      now += ms; setImmediate(callback); return 2;
+      now += ms;
+      if (options.composerAfterMs !== undefined && now >= options.composerAfterMs) while (detached.length) { const { parent, node } = detached.pop()!; parent.append(node); }
+      setImmediate(callback); return 2;
     },
     clearTimeout(id: number) { timers.delete(id); },
     chrome: { runtime: { id: "local-fixture", onMessage: { addListener(callback: Listener) { listener = callback; } },
       sendMessage(request: { type: string }) {
         messages.push(request);
         if (request.type === "auto-ready") { log.push("ready"); return Promise.resolve({ ok: true }); }
+        if (request.type === "sending") {
+          log.push("sending");
+          return Promise.resolve(options.sending ? options.sending(request) : { ok: true, data: null });
+        }
         if (request.type !== "begin") assert.fail("unexpected message");
         log.push("begin");
         if (options.hideAfterBegin) hidden = true;
@@ -80,7 +92,7 @@ test("content script times out to manual return and still accepts a later comple
   const { document, log, timers, mutated, ask } = await load();
   const response = await ask();
   assert.equal(response.ok, true); assert.equal(response.submitted, true);
-  assert.deepEqual(log, ["begin", "fill", "submit"], "it asks the extension before it writes anything");
+  assert.deepEqual(log, ["begin", "fill", "sending", "submit"], "it asks the extension before it writes anything");
   assert.equal(timers.size, 1);
   timers.get(1)!();
   assert.match(document.querySelector('[role="alert"]')!.textContent!, /manual paste-back.*Do not submit/);
@@ -96,7 +108,7 @@ test("content script reports an untouched page, without asking to fill, when no 
   const { log, ask } = await load({ signedOut: true });
   const response = await ask();
   assert.equal(response.ok, false); assert.equal(response.submitted, false); assert.equal(response.untouched, true);
-  assert.match(response.error!, /Sign in/);
+  assert.match(response.error!, /question box.*sign in/is);
   assert.deepEqual(log, []);
 });
 
@@ -104,7 +116,7 @@ test("content script reports an untouched page when the fresh conversation never
   const { log, ask } = await load({ neverFresh: true });
   const response = await ask();
   assert.equal(response.ok, false); assert.equal(response.untouched, true);
-  assert.match(response.error!, /fresh conversation/);
+  assert.match(response.error!, /starting a new conversation/);
   assert.deepEqual(log, [], "it never reached the fill step");
 });
 
@@ -150,7 +162,7 @@ test("automatic content fills and collects answer plus sources in an unfocused d
   const h = await load({ automatic: true, unfocused: true, sendNeedsVisible: true });
   assert.equal((await h.ask()).ok, true);
   await new Promise((r) => setImmediate(r));
-  assert.deepEqual(h.log, ["begin", "fill", "submit"]);
+  assert.deepEqual(h.log, ["begin", "fill", "sending", "submit"]);
   assert.equal((await h.collect()).answer, undefined, "streaming is not a completed answer");
   await new Promise((r) => setImmediate(r));
   h.document.querySelector("#answers")!.innerHTML = answerHtml;
@@ -172,6 +184,7 @@ test("automatic content fills and collects answer plus sources in an unfocused d
   assert.equal(h.document.querySelector('[data-e2e="fab-expy-sources-drawer"]'), null, "drawer restored");
   assert.deepEqual(JSON.parse(JSON.stringify(h.messages)), [
     { type: "begin", requestId: "fixture-request" },
+    { type: "sending", requestId: "fixture-request" },
     { type: "auto-ready", requestId: "fixture-request" },
   ]);
   assert.equal((await h.collect("stale-request")).ok, false);
@@ -183,7 +196,7 @@ test("automatic unfocused sign-in failure leaves the page untouched", async () =
   const result = await h.ask();
   assert.equal(result.untouched, true);
   assert.equal(result.submitted, false);
-  assert.match(result.error!, /Sign in/);
+  assert.match(result.error!, /question box.*sign in/is);
   assert.deepEqual(h.log, []);
 });
 
@@ -201,7 +214,7 @@ test("an automatic fill that never becomes sendable clears the draft and proves 
   assert.equal(result.ok, false);
   assert.equal(result.submitted, false, "Send was never pressed");
   assert.equal(result.untouched, false, "text had been filled in");
-  assert.match(result.error!, /did not show the expected/);
+  assert.match(result.error!, /Send stayed disabled/);
   assert.equal(h.log.includes("submit"), false);
   assert.equal(h.document.querySelector('[contenteditable="true"]')!.textContent, "", "the unsent draft was cleared");
 });
@@ -225,7 +238,7 @@ test("an automatic page that becomes visible shortly after opening is then fille
   const h = await load({ automatic: true, background: true, sendNeedsVisible: true, visibleAfterReads: 5 });
   const result = await h.ask();
   assert.equal(result.ok, true, result.error);
-  assert.deepEqual(h.log, ["begin", "fill", "submit"]);
+  assert.deepEqual(h.log, ["begin", "fill", "sending", "submit"]);
 });
 
 test("an automatic page that goes hidden mid-fill clears the draft and says the page was hidden, not that sign-in is needed", async () => {
@@ -279,4 +292,50 @@ test("injecting the content script twice installs one handler", async () => {
   runInNewContext(compiled.outputFiles[0]!.text, context);
   runInNewContext(compiled.outputFiles[0]!.text, context);
   assert.equal(handlers, 1);
+});
+
+test("an automatic page that is still starting waits for its real composer instead of failing on a half-loaded page", async () => {
+  const h = await load({ automatic: true, composerAfterMs: 8_000 });
+  const result = await h.ask();
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(h.log, ["begin", "fill", "sending", "submit"]);
+});
+
+test("an automatic page that stays on its sign-in screen says so, and fills nothing", async () => {
+  const h = await load({ automatic: true, signedOut: true, signInLink: true });
+  const result = await h.ask() as PageReply & { signedOut?: boolean };
+  assert.equal(result.ok, false); assert.equal(result.untouched, true); assert.equal(result.signedOut, true);
+  assert.match(result.error!, /sign-in page/);
+  assert.deepEqual(h.log, []);
+});
+
+test("an automatic page still loading at the deadline is reported as loading, not as signed out", async () => {
+  const h = await load({ automatic: true, signedOut: true, loading: true });
+  const result = await h.ask() as PageReply & { signedOut?: boolean };
+  assert.equal(result.untouched, true);
+  assert.equal(result.signedOut, undefined);
+  assert.match(result.error!, /still loading/);
+  assert.doesNotMatch(result.error!, /sign in/i);
+  assert.deepEqual(h.log, []);
+});
+
+test("Send is pressed only after the extension records it, and never if it refuses", async () => {
+  const h = await load({ automatic: true, sending: () => ({ ok: false, error: "closed" }) });
+  const result = await h.ask();
+  assert.equal(result.ok, false);
+  assert.equal(result.submitted, false, "Send was not pressed");
+  assert.deepEqual(h.log.slice(0, 3), ["begin", "fill", "sending"]);
+  assert.equal(h.log.includes("submit"), false, "Send was never clicked");
+  assert.equal(h.document.querySelector('[contenteditable="true"]')!.textContent, "", "the unsent draft was cleared");
+});
+
+test("a composer that ignores every way of inserting text names that step", async () => {
+  const h = await load({ automatic: true, ignoresText: true });
+  // Focused document with editing commands that report success but change nothing, and no fallback that sticks.
+  const box = h.document.querySelector<HTMLElement>('[contenteditable="true"]')!;
+  Object.defineProperty(box, "textContent", { get: () => "", set: () => {}, configurable: true });
+  const result = await h.ask();
+  assert.equal(result.ok, false); assert.equal(result.submitted, false);
+  assert.match(result.error!, /inserting the question text.*did not take it/);
+  assert.deepEqual(h.log.includes("submit"), false);
 });

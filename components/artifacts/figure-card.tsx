@@ -27,9 +27,9 @@ const isHttps = (url: string | undefined): url is string => typeof url === "stri
 
 function ExternalLink({ href, children }: { href: string; children: React.ReactNode }) {
 	return (
-		<a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline">
+		<a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline">
 			{children}
-			<ExternalLinkIcon className="size-3 shrink-0" aria-hidden="true" />
+			<ExternalLinkIcon className="ml-1 inline size-3 align-[-1px]" aria-hidden="true" />
 		</a>
 	);
 }
@@ -43,8 +43,8 @@ function LinkList({ links }: { links: FigureLink[] }) {
 					<li key={l.url} className="min-w-0 text-sm">
 						<div className="min-w-0 break-words">
 							<ExternalLink href={l.url}>{l.title}</ExternalLink>
-							<span className="text-xs text-muted-foreground"> · {l.source}</span>
 						</div>
+						<div className="text-xs text-muted-foreground">{l.source}</div>
 						<div className="text-muted-foreground">{l.note}</div>
 					</li>
 				))}

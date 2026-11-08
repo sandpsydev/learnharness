@@ -449,6 +449,16 @@ describe("tool descriptions carry mechanics only, no question-craft", () => {
 			}
 		});
 	}
+	it("the teach quiz and explain describe the check set (several checks in one turn); the probe tools stay one question per turn", () => {
+		const teachExplain = teachExplainToolFor({ chatId: "chat_x", chatStore: undefined as never });
+		for (const [name, tool] of [["quiz", teachQuiz], ["explain", teachExplain]] as const) {
+			assert.ok(tool.description.includes("check set"), `teach ${name} names the check set`);
+			assert.ok(tool.description.includes("ONE question per turn for a predict"), `teach ${name} keeps the predict rule`);
+			assert.ok(tool.description.includes("Never mix a predict into a set"), `teach ${name} keeps predicts out of sets`);
+		}
+		assert.ok(!probeQuizTool.description.includes("check set"), "the probe quiz is untouched");
+		assert.ok(probeQuizTool.description.includes("call a single probe, then end your turn"));
+	});
 	it("the teach quiz declares the `type` field and `nodeId`; the probe quiz declares neither", () => {
 		assert.ok(teachQuiz.description.includes("`type`"), "teach quiz points at the role field");
 		assert.ok(teachQuiz.description.includes("`nodeId`"), "teach quiz points at the plan-map validation");

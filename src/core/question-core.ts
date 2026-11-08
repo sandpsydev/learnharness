@@ -158,7 +158,7 @@ export function quizInputProblems(input: {
 export const quizInputBase = Type.Object({
 	question: Type.String({
 		description:
-			"The single quiz question to ask. ONE question per turn: ask, then end your turn — the answer determines the next question.",
+			"The one quiz question this call asks. Ask, then end your turn — the answer determines what comes next (a teach check set is the exception: see the tool description).",
 	}),
 	options: Type.Array(Type.Object(quizOptionProps), {
 		minItems: 2,
@@ -244,7 +244,7 @@ const predictCheckType = Type.Union([Type.Literal("predict"), Type.Literal("chec
 		"REQUIRED — the question's role in the teaching cycle, as a bare word (no quotes): predict = posed BEFORE " +
 		"you teach the step (its own turn; the learner answers, then your teaching resolves it — arrives open, never " +
 		"collapsed); check = posed AFTER the step's teaching is complete (arrives collapsed behind the Check your " +
-		"understanding reveal). ONE question per turn either way.",
+		"understanding reveal). A predict is ONE question per turn; checks may form a set in one turn.",
 });
 
 
@@ -303,7 +303,7 @@ export const quizDisplayInputSchema = Type.Object({
 export const explainInputBase = Type.Object({
 	question: Type.String({
 		description:
-			"The single question to ask. ONE question per turn: ask, then end your turn — the answer determines the next.",
+			"The one question this call asks. Ask, then end your turn — the answer determines what comes next (a teach check set is the exception: see the tool description).",
 	}),
 	correctAnswer: Type.String({
 		description:

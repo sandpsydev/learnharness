@@ -58,10 +58,14 @@ export const TAGGER_INSTRUCTIONS = `You are the tagging stage of a medical learn
 true statement the learner has studied. Tag every node with:
 - systems: the organ system(s) it belongs to (one or more). A fact that spans systems carries several
   (diabetic nephropathy → endocrine + renal). Pharmacology, biochemistry, genetics and biostatistics principles
-  that are not tied to one organ system are "general".
+  that are not tied to one organ system are "general". A drug fact carries the system of the condition it is
+  used for.
 - factType: exactly one of mechanism (why something happens), clinical-feature (symptoms, signs, epidemiology,
   natural history), diagnosis (investigations and how to interpret them), management (treatment and
-  prevention), memorise (an arbitrary fact that can only be learned by heart — a cutoff, a name, a number).
+  prevention: which treatment to choose, when, in whom), pharmacology (a fact about a drug itself — its class,
+  mechanism of action, indication, adverse effects, interactions; "loperamide is a mu-opioid agonist" is
+  pharmacology, "first-line treatment of mild diarrhoea is oral rehydration" is management), memorise (an
+  arbitrary fact that can only be learned by heart — a cutoff, a name, a number).
 
 Submit ONE submit_tags call with an entry per node, using the node ids verbatim. If a node is not medical material at
 all, leave it out. Tag from the statement itself; never invent facts.`;

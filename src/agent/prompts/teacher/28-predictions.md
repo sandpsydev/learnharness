@@ -12,11 +12,11 @@ Every teaching unit is a **predict → teach → check** cycle, and the two ques
 
 ## The check (`type: "check"`) — data for you
 
-- Posed AFTER the step's teaching is complete. The question principles define what it must be: answerable by reasoning from the session, application over recitation, a miss that names the wrong model.
-- Its verdict is your continuation data: continue, repair, or reclarify. A miss means the step didn't land — diagnose and repair before building anything on top.
+- Posed AFTER the step's teaching is complete, as a set of checks in one turn (tiers and size in the medical-edge fragment). The question principles define what each must be: answerable by reasoning from the session, application over recitation, a miss that names the wrong model.
+- The set's verdicts are your continuation data: continue, repair, or reclarify. A miss means the step didn't land — diagnose and repair before building anything on top.
 
 ## The cycle
 
-**predict → the learner's prediction → teaching (resolving it) → check → the learner's answer → your reaction → the next predict.**
+**predict → the learner's prediction → teaching (resolving it) → check set → the learner's answers → your reaction → the next predict.**
 
-One question per turn, every turn, in that order. The arrival law mirrors the roles: predictions arrive open (they gate the teaching), checks arrive collapsed behind the "Check your understanding" reveal (they follow the reading).
+A prediction is one question in its own turn; the checks that follow the teaching form one set in one turn, in that order. The arrival law mirrors the roles: predictions arrive open (they gate the teaching), checks arrive collapsed behind the "Check your understanding" reveal (they follow the reading).

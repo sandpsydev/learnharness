@@ -139,6 +139,21 @@ export const quizExampleBody = {
 	correctAnswer: "a",
 };
 
+/** The teach tools' turn rule (check sets, 2026-11): a predict is ONE question
+ *  per turn; a check step may carry several graded checks in ONE turn. The
+ *  parallel-question machinery already does the rest — the batch is asked in
+ *  call order (the first behind the reveal, the rest open: a question that
+ *  follows a question has nothing left to wait for), saved, and answered one
+ *  by one, and the single reaction turn fires after the LAST answer. Mechanics
+ *  only; what a set should contain is the teacher fragments' craft. */
+export const CHECK_SET_MECHANICS = (tool: "quiz" | "explain"): string =>
+	"ONE question per turn for a predict: call a single " +
+	tool +
+	", then end your turn. A step's CHECKS may instead be a check set: several " +
+	tool +
+	" calls with `type` check in the SAME turn, all on the same `nodeId`. The learner answers them in the order you call them (the first behind the reveal, the rest open at once) " +
+	"and you react once, after the last answer, with every result in hand. Never mix a predict into a set.";
+
 /** The quiz mechanics every variant shares; `delta` appends the variant's
  *  own fields (its NAME among them — the probe-phase tools self-reference
  *  as probe/recall, owner 2026-10-09). All mechanics, zero doctrine — plus
@@ -160,9 +175,7 @@ function quizDescription(delta: { name: "quiz" | "probe"; nodeId: boolean; types
 		(delta.nodeId
 			? "Set `nodeId` (required) to the plan node this question is about — validated at call time against the session's plan map. For off-map checks use ask_user_question. "
 			: "") +
-		"ONE question per turn: call a single " +
-		delta.name +
-		", then end your turn — the learner's answer determines the next.";
+		(delta.types ? CHECK_SET_MECHANICS("quiz") : "ONE question per turn: call a single " + delta.name + ", then end your turn — the learner's answer determines the next.");
 	// Phase-correct shape: the teach example LEADS with the required pair
 	// (type, nodeId — the 2026-10-09 drop-order ruling); the probe example
 	// carries no phase metadata at all, exactly like the probe schema.
@@ -193,7 +206,9 @@ function explainDescription(name: "explain" | "recall", nodeId: boolean): string
 		(nodeId
 			? "Set `nodeId` (required) to the plan node this question is about — validated at call time against the session's plan map. "
 			: "") +
-		"ONE question per turn: call a single " + name + ", then end your turn — the learner's answer determines the next."
+		(nodeId
+			? CHECK_SET_MECHANICS("explain")
+			: "ONE question per turn: call a single " + name + ", then end your turn — the learner's answer determines the next.")
 	);
 }
 

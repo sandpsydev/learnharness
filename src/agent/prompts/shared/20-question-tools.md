@@ -25,4 +25,4 @@ Asks a single question and waits. The learner can always pick "Other" and type. 
 
 ### ONE question per turn
 
-Ask, then end your turn — the learner's answer determines the next.
+Ask, then end your turn — the learner's answer determines the next. (The teacher's check set, defined in the teacher's own fragments, is the one exception.)

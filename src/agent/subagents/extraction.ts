@@ -161,11 +161,12 @@ const systemsDescription =
 	"OPTIONAL organ system(s) this idea belongs to — one or more of: " +
 	ORGAN_SYSTEMS.map((s) => `"${s.id}" (${s.label})`).join(", ") +
 	'. A fact spanning systems carries several (diabetic nephropathy → ["endocrine", "renal"]). ' +
-	'Use "general" for pharmacology, biochemistry, genetics and biostatistics principles. Omit for non-medical material.';
+	'Use "general" for biochemistry, genetics and biostatistics principles, and for a drug fact with no one system. Omit for non-medical material.';
 const factTypeDescription =
 	"OPTIONAL fact type — exactly one of: " +
 	FACT_TYPES.map((t) => `"${t.id}" (${t.label})`).join(", ") +
-	". Omit for non-medical material.";
+	'. Use "pharmacology" for a fact about a drug itself (its class, mechanism of action, indication, adverse effects, ' +
+	'interactions); "management" is which treatment to choose for a condition. Omit for non-medical material.';
 
 const propositionProps = {
 	id: Type.String({ description: 'Local id: "p1", "p2", … — referenced by chains in this call.' }),
@@ -479,7 +480,7 @@ TOGETHER — independent arguments for the same conclusion are separate chains. 
 reappear, by id, as a premise of later chains. A bare idea that no argument uses rides the
 propositions list alone. Include every field even when empty — "chains": [] when the source makes no
 arguments. When the material is medical, also tag each NEW idea with its organ system(s) and its fact
-type (the optional systems and factType fields); an idea the graph already holds keeps its existing tags,
+type (the optional systems and factType fields; a fact about a drug itself is pharmacology); an idea the graph already holds keeps its existing tags,
 so tag only the ideas you submit. The tool's field descriptions carry the details.`;
 
 export const EXTRACTOR_INSTRUCTIONS = `${SESSION_PREAMBLE}\n\n${EXTRACTION_CORE}\n\n${SESSION_MESSAGE_ID_RULE}`;

@@ -24,6 +24,7 @@ const contracts = await import("../src/core/contracts.ts");
 const {
 	FACT_TYPES,
 	ORGAN_SYSTEMS,
+	factTypeLabel,
 	isUntagged,
 	sanitizeFactType,
 	sanitizeSystems,
@@ -74,11 +75,11 @@ const line = (over: Partial<GraphNode> & { id: string }): GraphNode => ({
 });
 
 describe("the shared value lists", () => {
-	it("hold the spec's 13 organ systems and 5 fact types, with unique ids", () => {
+	it("hold the spec's 13 organ systems and 6 fact types, with unique ids", () => {
 		assert.equal(ORGAN_SYSTEMS.length, 13);
-		assert.equal(FACT_TYPES.length, 5);
+		assert.equal(FACT_TYPES.length, 6);
 		assert.equal(new Set(ORGAN_SYSTEMS.map((s) => s.id)).size, 13);
-		assert.equal(new Set(FACT_TYPES.map((t) => t.id)).size, 5);
+		assert.equal(new Set(FACT_TYPES.map((t) => t.id)).size, 6);
 	});
 
 	it("sanitizeSystems maps ids and labels in any case, dedupes, orders by the list, drops unknowns", () => {
@@ -94,6 +95,20 @@ describe("the shared value lists", () => {
 		assert.equal(sanitizeFactType("Diagnosis/investigation"), "diagnosis");
 		assert.equal(sanitizeFactType("treatment"), undefined);
 		assert.equal(sanitizeFactType(3), undefined);
+	});
+
+	it("pharmacology is a fact type: id, label and a tolerant lookup", () => {
+		assert.equal(sanitizeFactType("pharmacology"), "pharmacology");
+		assert.equal(sanitizeFactType("Pharmacology"), "pharmacology");
+		assert.equal(factTypeLabel("pharmacology"), "Pharmacology");
+	});
+
+	it("the tagger and extractor tell the model what pharmacology covers (a drug itself, not the treatment choice)", async () => {
+		const { TAGGER_INSTRUCTIONS } = await import("../src/agent/subagents/tagger.ts");
+		const { EXTRACTION_CORE } = await import("../src/agent/subagents/extraction.ts");
+		assert.ok(/pharmacology \(a fact about a drug itself/.test(TAGGER_INSTRUCTIONS));
+		assert.ok(TAGGER_INSTRUCTIONS.includes("loperamide"));
+		assert.ok(EXTRACTION_CORE.includes("a fact about a drug itself is pharmacology"));
 	});
 
 	it("isUntagged is true while either tag is missing", () => {

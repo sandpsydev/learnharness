@@ -28,7 +28,7 @@
 }
 
 /* Palette (owner's hexes): main #141414, raised #1C1C1C, edges #434343.
-   Mono chrome = JetBrains Mono; prose = Source Sans 3; titles = CMU Serif. */
+   Chrome + prose = Apple system font (SF Pro); code = SF Mono; titles = CMU Serif. */
 :root {
 	color-scheme: dark;
 	--radius: 8px;
@@ -112,16 +112,17 @@
 }
 
 @theme inline {
-	/* Fonts: chrome = JetBrains Mono, prose = Source Sans 3, titles = CMU
-	   Serif bold. The JetBrains/SourceSans variables attach in app/layout.tsx.
+	/* Fonts: chrome + prose = the Apple system stack (SF Pro on Apple
+	   devices, clean fallback elsewhere; nothing bundled), code = ui-monospace
+	   (SF Mono), titles = CMU Serif bold.
 	   (owner, typography round) The Tailwind defaults are ALIASED to the app
 	   fonts: `font-mono`/`font-sans` utilities would otherwise fall to the
 	   SYSTEM stacks — a fourth font the app never chose — and streamdown's
 	   code-block chrome + mermaid-error + demo-card all use them. */
-	--font-ui: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
-	--font-prose: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
-	--font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
-	--font-sans: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
+	--font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, "Helvetica Neue", sans-serif;
+	--font-prose: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, "Helvetica Neue", sans-serif;
+	--font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+	--font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, "Helvetica Neue", sans-serif;
 	/* The modular type ladder — each size carries its own line-height.
 	   Component sizes must pull from this ladder. (owner, typography
 	   round 4: the 10px rung is merged into 11 — one pixel apart was a
@@ -186,7 +187,7 @@ body {
 }
 
 /* Teaching prose (the markdown renderer's container gets .lh-prose):
-   Source Sans 3 with the size/leading tokens; emphasis color bound to
+   the system font with the size/leading tokens; emphasis color bound to
    the settings-ready tokens. */
 .lh-prose {
 	font-family: var(--font-prose);
@@ -195,8 +196,7 @@ body {
 }
 
 /* Session-name weight (owner, fix wave round 3): with the serif toggle
-   OFF, --font-title resolves to the prose font — Source Sans 3 is loaded
-   as a VARIABLE font, and without an explicit weight the titles render at
+   OFF, --font-title resolves to the prose font — without an explicit weight the titles render at
    400, a whisper next to CMU's bold-only face. Request 900: the variable
    font takes it, and CMU (a single 700 face) snaps to its nearest
    available weight — the same rendering it already had. */
@@ -225,8 +225,8 @@ body {
 
 /* Markdown headings render at the font's BLACK weight (owner ask,
    2026-09-19) — 900, not streamdown's font-semibold 600. The variable
-   Source Sans 3 axis spans 200–900 (next/font loads the full range), so
-   900 draws the real Black cut. Unlayered CSS beats the utility layer;
+   system font ships a Black/Heavy cut on Apple devices, so
+   900 draws it. Unlayered CSS beats the utility layer;
    :where keeps specificity zero. Chrome titles (CMU Serif) don't live
    under .lh-prose and stay untouched. */
 .lh-prose :where(h1, h2, h3, h4, h5, h6) {

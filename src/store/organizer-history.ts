@@ -28,6 +28,7 @@ const isEntry = (v: unknown): v is OrganizerHistoryEntry =>
 	Array.isArray(v.previews) &&
 	isDiff(v.nodes) &&
 	isDiff(v.chains) &&
+	(v.placements === undefined || isDiff(v.placements)) &&
 	Array.isArray(v.createdNodeIds);
 
 export function createOrganizerHistoryStore(file: string = ORGANIZER_HISTORY_FILE): OrganizerHistoryStore {

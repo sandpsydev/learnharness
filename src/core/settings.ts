@@ -324,6 +324,9 @@ export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
 	// The graph organizer converses and makes judgment calls about the
 	// learner's knowledge map, so it draws the strong slot.
 	organizer: "strong",
+	// Placing a fact in the outline is high-volume classification (the whole
+	// graph, in batches), so it draws the cheap slot like the extractor does.
+	placer: "cheap",
 	// Illness scripts are long, source-checked review text, and the illness
 	// list is a judgment over the whole graph: both want the strong slot.
 	scriptwriter: "strong",

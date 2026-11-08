@@ -67,6 +67,8 @@ export type ModelRole =
 	| "auditor"
 	/** The knowledge-organizer on the graph page (medical fork). */
 	| "organizer"
+	/** Places every fact in the organ system → topic → aspect outline (medical fork). */
+	| "placer"
 	/** Review mode (medical fork): writes illness scripts and lists the illnesses in the graph. */
 	| "scriptwriter";
 
@@ -98,6 +100,11 @@ export const SOURCES_FILE = path.join(PATHS.graph, "sources.json");
  *  diff of every applied change set, so the latest one can be undone. A
  *  small JSON file, read-modify-write; absent = nothing applied yet. */
 export const ORGANIZER_HISTORY_FILE = path.join(PATHS.graph, "organizer-history.json");
+/** The placement ledger (medical fork): append-only JSONL beside the graph
+ *  ledgers — topics, each fact's place, withdrawn places (contracts/placement.ts). */
+export const PLACEMENTS_FILE = path.join(PATHS.graph, "placements.jsonl");
+/** The placer's run journal: one small JSON list, so a run can be reverted. */
+export const PLACER_JOURNAL_FILE = path.join(PATHS.graph, "placer-runs.json");
 export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
 
 /**

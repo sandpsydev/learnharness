@@ -66,12 +66,15 @@ import type {
 import { MIN_CLUSTER_SIZE } from "./clusters.ts";
 import { formatChainLine } from "./chains.ts";
 import { attachImpToCommunities, birthSessionOf, birthSessionPartition } from "./session-clusters.ts";
-import type { ChatStore, GraphStore } from "./ports.ts";
+import { placementView } from "./placement.ts";
+import type { ChatStore, GraphStore, PlacementStore } from "./ports.ts";
 
 /** The storage ports every graph operation needs, passed explicitly. */
 export interface GraphDeps {
 	chatStore: ChatStore;
 	graphStore: GraphStore;
+	/** Where each fact sits in the outline (medical fork) — absent = no placement data. */
+	placementStore?: PlacementStore;
 }
 
 /** "n_" + 12 hex chars (contracts.ts GraphNode.id — store-assigned). */
@@ -689,6 +692,9 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		nodeSessions,
 		clusters,
 		...(Object.keys(positions).length > 0 ? { positions } : {}),
+		...(deps.placementStore
+			? { placement: placementView(deps.placementStore.read(), graph.nodes.map((n) => n.id)) }
+			: {}),
 	};
 }
 

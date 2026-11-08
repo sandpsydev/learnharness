@@ -27,6 +27,10 @@
  *     later extraction run cannot silently undo the learner's connection.
  *   - tags come from the fixed vocabulary (contracts/graph.ts) — an unknown
  *     organ system or fact type is a rejection, never a silent drop.
+ *   - a placement (organ system › topic › aspect) is moved with set_placement:
+ *     the topic is reused when it already exists under that name (the
+ *     canonical list is never duplicated), a new topic needs its organ system,
+ *     and the aspect comes from the fixed illness-script list.
  *   - the set is ALL OR NOTHING: any problem rejects the whole set.
  *
  * HOW EDITS LAND IN THE LEDGERS
@@ -36,6 +40,9 @@
  *     old statement is kept as an alias — the identity audit trail.
  *   - tags: an appended learner-edit tag line, exactly like the detail card.
  *   - connections: chain lines added, removed or replaced in place.
+ *   - placements: lines appended to the placement ledger (a learner-sourced
+ *     "place", plus a "topic" line when the set mints a topic); the journal's
+ *     placement diff lets undo take exactly those lines back out.
  *   The two ledgers are rewritten atomically (store.rewriteLedgers); the
  *   journal stores the line-level diff, so undo restores the exact lines.
  */
@@ -52,7 +59,18 @@ import {
 } from "./contracts/graph.ts";
 import { chainKey, getGraph, newGraphChainId, newGraphNodeId, simplifyChains, tagFields, tagLine } from "./graph.ts";
 import {
+	PLACEMENT_ASPECTS,
+	placementAspectLabel,
+	placementPathText,
+	sanitizePlacementAspect,
+	type PlacementAspect,
+	type PlacementLine,
+	type TopicLine,
+} from "./contracts/placement.ts";
+import { TOPIC_NAME_MAX, derivePlacements, findTopic, newTopicId } from "./placement.ts";
+import {
 	ORGANIZER_MAX_CHANGES,
+	ORGANIZER_MAX_PLACED,
 	ORGANIZER_NAME_MAX,
 	ORGANIZER_OPS,
 	ORGANIZER_STATEMENT_MAX,
@@ -72,6 +90,12 @@ export interface OrganizerHistoryStore {
 	write(entries: OrganizerHistoryEntry[]): void;
 }
 
+/** The placement ledger as the organizer sees it: read, and replace (undo / apply write whole). */
+export interface OrganizerPlacementPort {
+	read(): PlacementLine[];
+	rewrite(lines: readonly PlacementLine[]): void;
+}
+
 /** How many applied sets the journal keeps. */
 export const ORGANIZER_HISTORY_LIMIT = 20;
 
@@ -84,6 +108,8 @@ export type OrganizerPlan =
 			ok: true;
 			nodeLines: GraphNode[];
 			chainLines: GraphChain[];
+			/** The placement ledger after the set (the input unchanged when no change touches placement). */
+			placementLines: PlacementLine[];
 			previews: OrganizerChangePreview[];
 			createdNodeIds: string[];
 	  }
@@ -91,6 +117,10 @@ export type OrganizerPlan =
 
 export interface PlanOptions {
 	now?: string;
+	/** The placement ledger as it is now. Absent = placement is not available (set_placement is refused). */
+	placementLines?: readonly PlacementLine[];
+	/** Test seam: deterministic topic ids. */
+	newTopicId?: () => string;
 	/** Test seams: deterministic ids. */
 	newNodeId?: () => string;
 	newChainId?: () => string;
@@ -133,13 +163,13 @@ export function parseOrganizerChanges(raw: unknown): { changes: RawOrganizerChan
 			return;
 		}
 		const change: RawOrganizerChange = { op };
-		for (const key of ["ref", "name", "statement", "factType", "nodeId", "chainId", "conclusion"] as const) {
+		for (const key of ["ref", "name", "statement", "factType", "nodeId", "chainId", "conclusion", "topic", "system", "aspect"] as const) {
 			if (r[key] === undefined || r[key] === null) continue;
 			const value = asString(r[key]);
 			if (value === undefined) problems.push(`${at} (${describeOp(op)}): ${key} must be text.`);
 			else change[key] = value;
 		}
-		for (const key of ["systems", "premises"] as const) {
+		for (const key of ["systems", "premises", "nodeIds"] as const) {
 			if (r[key] === undefined || r[key] === null) continue;
 			const value = asStringArray(r[key]);
 			if (value === undefined) problems.push(`${at} (${describeOp(op)}): ${key} must be a list of text.`);
@@ -182,6 +212,9 @@ export function planOrganizerChanges(
 	// Working copies — shallow-cloned lines, because edits replace fields.
 	const nodeLines: GraphNode[] = currentNodeLines.map((l) => ({ ...l, aliases: [...l.aliases], provenance: [...l.provenance] }));
 	let chainLines: GraphChain[] = currentChainLines.map((l) => ({ ...l, premises: [...l.premises], provenance: [...l.provenance] }));
+	const placementAvailable = options.placementLines !== undefined;
+	const placementLines: PlacementLine[] = [...(options.placementLines ?? [])];
+	const mintTopic = options.newTopicId ?? newTopicId;
 
 	let cache: ReturnType<typeof getGraph> | null = null;
 	const graph = () => (cache ??= getGraph({ readNodes: () => nodeLines, readChains: () => chainLines }));
@@ -464,6 +497,90 @@ export function planOrganizerChanges(
 				previews.push({ op, title: `Change the tags of ${quote(node.name)}`, rows });
 				return;
 			}
+			case "set_placement": {
+				if (!placementAvailable) {
+					problems.push(`${at}: placement is not available here.`);
+					return;
+				}
+				const rawIds = change.nodeIds ?? [];
+				const before = problems.length;
+				if (rawIds.length === 0) problems.push(`${at}: nodeIds is missing — list the facts to move.`);
+				else if (rawIds.length > ORGANIZER_MAX_PLACED) {
+					problems.push(`${at}: too many facts (${rawIds.length}) — move at most ${ORGANIZER_MAX_PLACED} per change.`);
+				}
+				const ids: string[] = [];
+				if (rawIds.length <= ORGANIZER_MAX_PLACED) {
+					for (const raw of rawIds) {
+						const id = resolveNode(at, "node", raw);
+						if (id !== undefined && !ids.includes(id)) ids.push(id);
+					}
+				}
+				const topicText = change.topic?.replace(/\s+/g, " ").trim() ?? "";
+				if (topicText === "") problems.push(`${at}: topic is missing — name the disease or subject to move the facts under.`);
+				let system: OrganSystem | undefined;
+				if (change.system !== undefined) {
+					system = sanitizeSystems([change.system])[0];
+					if (system === undefined) problems.push(`${at}: unknown organ system ${quote(change.system)} — use only the existing systems.`);
+				}
+				let aspect: PlacementAspect | undefined;
+				if (change.aspect !== undefined) {
+					aspect = sanitizePlacementAspect(change.aspect);
+					if (aspect === undefined) {
+						problems.push(`${at}: unknown aspect ${quote(change.aspect)} — use one of ${PLACEMENT_ASPECTS.map((a) => a.id).join(", ")}.`);
+					}
+				}
+				if (problems.length > before) return;
+
+				const derived = derivePlacements(placementLines);
+				let topic = findTopic(derived.topics.values(), topicText, system);
+				let minted: TopicLine | undefined;
+				if (topic) {
+					if (system !== undefined && topic.system !== system) {
+						problems.push(
+							`${at}: the topic ${quote(topic.name)} lives under ${organSystemLabel(topic.system)}, not ${organSystemLabel(system)} — name that system, or choose a different topic.`,
+						);
+						return;
+					}
+				} else {
+					if (/^t_[0-9a-f]+$/.test(topicText)) {
+						problems.push(`${at}: ${quote(topicText)} is not a topic in the outline — give the topic's name instead.`);
+						return;
+					}
+					if (system === undefined) {
+						problems.push(`${at}: ${quote(topicText)} is a new topic — say which organ system it belongs under.`);
+						return;
+					}
+					if (topicText.length > TOPIC_NAME_MAX) {
+						problems.push(`${at}: the topic name is too long (${topicText.length} characters; at most ${TOPIC_NAME_MAX}).`);
+						return;
+					}
+					minted = { kind: "topic", id: mintTopic(), name: topicText, system, createdAt: now };
+					topic = { id: minted.id, name: minted.name, system: minted.system };
+				}
+
+				const moved: PlacementLine[] = [];
+				for (const id of ids) {
+					const current = derived.byNode.get(id);
+					const target = aspect ?? current?.aspect ?? "other";
+					if (current && current.topicId === topic.id && current.aspect === target) continue;
+					moved.push({ kind: "place", nodeId: id, topicId: topic.id, aspect: target, source: "learner", confidence: "high", at: now });
+					const was = current ? placementPathText(derived.topics.get(current.topicId), current.aspect) : "Not placed yet";
+					rows.push({ field: nameOf(id), before: was, after: placementPathText(topic, target) });
+				}
+				if (moved.length === 0) {
+					problems.push(`${at}: ${ids.length === 1 ? "that fact is" : "those facts are"} already there.`);
+					return;
+				}
+				if (minted) placementLines.push(minted);
+				placementLines.push(...moved);
+				const where = placementPathText(topic, aspect);
+				previews.push({
+					op,
+					title: `Move ${moved.length} ${moved.length === 1 ? "fact" : "facts"} to ${where}${aspect === undefined ? " (each keeps its aspect)" : ""}`,
+					rows,
+				});
+				return;
+			}
 			case "add_connection": {
 				const newId = mintChain();
 				const ok = checkConnection(at, change.premises, change.conclusion, chainLines, newId);
@@ -530,7 +647,7 @@ export function planOrganizerChanges(
 	});
 
 	if (problems.length > 0) return { ok: false, problems };
-	return { ok: true, nodeLines, chainLines, previews, createdNodeIds };
+	return { ok: true, nodeLines, chainLines, placementLines, previews, createdNodeIds };
 }
 
 // ─── apply / undo ────────────────────────────────────────────────────────────
@@ -593,6 +710,8 @@ export type OrganizerApplyResult =
 export interface OrganizerDeps {
 	graphStore: GraphStore;
 	history: OrganizerHistoryStore;
+	/** The placement ledger. Absent = set_placement is unavailable (and undo has nothing to take back). */
+	placements?: OrganizerPlacementPort;
 }
 
 /**
@@ -605,10 +724,14 @@ export function applyOrganizerChanges(
 	input: { summary: string; changes: readonly RawOrganizerChange[] },
 	options: PlanOptions & { entryId?: string } = {},
 ): OrganizerApplyResult {
-	const { graphStore, history } = deps;
+	const { graphStore, history, placements } = deps;
 	const nodesBefore = graphStore.readNodes();
 	const chainsBefore = graphStore.readChains();
-	const plan = planOrganizerChanges(nodesBefore, chainsBefore, input.changes, options);
+	const placementsBefore = placements?.read();
+	const plan = planOrganizerChanges(nodesBefore, chainsBefore, input.changes, {
+		...options,
+		...(placementsBefore ? { placementLines: placementsBefore } : {}),
+	});
 	if (!plan.ok) return plan;
 
 	const dangling = danglingChainIds(nodesBefore, chainsBefore);
@@ -619,13 +742,17 @@ export function applyOrganizerChanges(
 
 	const nodes = diffLines(nodesBefore, plan.nodeLines);
 	const chains = diffLines(chainsBefore, plan.chainLines);
-	if (isEmptyDiff(nodes) && isEmptyDiff(chains)) {
+	const placementDiff = diffLines(placementsBefore ?? [], plan.placementLines);
+	if (isEmptyDiff(nodes) && isEmptyDiff(chains) && isEmptyDiff(placementDiff)) {
 		return { ok: false, problems: ["Nothing would change."] };
 	}
-	graphStore.rewriteLedgers({
-		...(isEmptyDiff(nodes) ? {} : { nodes: plan.nodeLines }),
-		...(isEmptyDiff(chains) ? {} : { chains: plan.chainLines }),
-	});
+	if (!isEmptyDiff(nodes) || !isEmptyDiff(chains)) {
+		graphStore.rewriteLedgers({
+			...(isEmptyDiff(nodes) ? {} : { nodes: plan.nodeLines }),
+			...(isEmptyDiff(chains) ? {} : { chains: plan.chainLines }),
+		});
+	}
+	if (placements && !isEmptyDiff(placementDiff)) placements.rewrite(plan.placementLines);
 
 	const entry: OrganizerHistoryEntry = {
 		id: options.entryId ?? `org_${randomBytes(6).toString("hex")}`,
@@ -634,6 +761,7 @@ export function applyOrganizerChanges(
 		previews: plan.previews,
 		nodes,
 		chains,
+		...(isEmptyDiff(placementDiff) ? {} : { placements: placementDiff }),
 		createdNodeIds: plan.createdNodeIds,
 	};
 	history.write([...history.read(), entry].slice(-ORGANIZER_HISTORY_LIMIT));
@@ -656,7 +784,7 @@ function latestLive(entries: readonly OrganizerHistoryEntry[]): OrganizerHistory
  * created, or when putting the old lines back would orphan a connection.
  */
 export function undoOrganizerEntry(deps: OrganizerDeps, entryId: string, options: { now?: string } = {}): OrganizerUndoResult {
-	const { graphStore, history } = deps;
+	const { graphStore, history, placements } = deps;
 	const entries = history.read();
 	const entry = entries.find((e) => e.id === entryId);
 	if (!entry) return { ok: false, code: "not_found", reason: "No such change set." };
@@ -672,12 +800,18 @@ export function undoOrganizerEntry(deps: OrganizerDeps, entryId: string, options
 	const nodeText = revertDiff(nodesNow, entry.nodes);
 	const chainText = revertDiff(chainsNow, entry.chains);
 	if (nodeText === null || chainText === null) return conflict(stale);
+	const placementsDiff = entry.placements;
+	const placementText = placementsDiff && !isEmptyDiff(placementsDiff) ? revertDiff(placements?.read() ?? [], placementsDiff) : undefined;
+	if (placementText === null) return conflict(stale);
+	if (placementsDiff && !isEmptyDiff(placementsDiff) && !placements) return conflict(stale);
 
 	let nodeLines: GraphNode[];
 	let chainLines: GraphChain[];
+	let placementLines: PlacementLine[] | undefined;
 	try {
 		nodeLines = nodeText.map((t) => JSON.parse(t) as GraphNode);
 		chainLines = chainText.map((t) => JSON.parse(t) as GraphChain);
+		placementLines = placementText?.map((t) => JSON.parse(t) as PlacementLine);
 	} catch {
 		return conflict(stale);
 	}
@@ -689,10 +823,13 @@ export function undoOrganizerEntry(deps: OrganizerDeps, entryId: string, options
 	const fresh = [...danglingChainIds(nodeLines, chainLines)].filter((id) => !dangling.has(id));
 	if (fresh.length > 0) return conflict("Undoing would leave a connection without one of its nodes (a node was deleted since).");
 
-	graphStore.rewriteLedgers({
-		...(isEmptyDiff(entry.nodes) ? {} : { nodes: nodeLines }),
-		...(isEmptyDiff(entry.chains) ? {} : { chains: chainLines }),
-	});
+	if (!isEmptyDiff(entry.nodes) || !isEmptyDiff(entry.chains)) {
+		graphStore.rewriteLedgers({
+			...(isEmptyDiff(entry.nodes) ? {} : { nodes: nodeLines }),
+			...(isEmptyDiff(entry.chains) ? {} : { chains: chainLines }),
+		});
+	}
+	if (placements && placementLines) placements.rewrite(placementLines);
 	const undone: OrganizerHistoryEntry = { ...entry, undoneAt: options.now ?? new Date().toISOString() };
 	history.write(entries.map((e) => (e.id === entryId ? undone : e)));
 	return { ok: true, entry: undone };

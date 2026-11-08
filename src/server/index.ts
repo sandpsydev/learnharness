@@ -9,6 +9,7 @@ export * from "./events-stream.ts";
 export * from "./chats.ts";
 export * from "./graph.ts";
 export * from "./graph-organizer.ts";
+export * from "./placement.ts";
 export * from "./obsidian.ts";
 export * from "./review.ts";
 export * from "./anki.ts";

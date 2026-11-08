@@ -2,7 +2,7 @@
  * The appearance wave's font dropdown (2026-09-26): the pure row-set
  * (fontMenuResults — the DEFAULT row is a fuzzy candidate, so Enter can
  * never pick a row that isn't on screen), the pick composer (null = the
- * factory Source Sans 3), the curated dev-browser fallback roster, the
+ * factory system font), the curated dev-browser fallback roster, the
  * FontMenuList SSR shape, and the emphasis-ink factory ruling (globals.css
  * no longer ships #ee928c/#6fa9d6 — unset inks are the text color).
  */
@@ -26,11 +26,11 @@ describe("fontMenuResults — the DEFAULT row is a candidate, never a ghost pick
 		assert.deepEqual(fontMenuResults("", families), [null, "Arial", "CMU Serif", "Georgia", "Helvetica Neue", "Menlo"]);
 	});
 
-	it("the default row matches its own identity (source/sans/default), not everything", () => {
+	it("the default row matches its own identity (system/sf/default), not everything", () => {
 		assert.deepEqual(fontMenuResults("georgia", families), ["Georgia"]);
 		assert.deepEqual(fontMenuResults("menlo", families), ["Menlo"]);
 		// the default row is reachable by search…
-		assert.deepEqual(fontMenuResults("source", families)[0], null);
+		assert.deepEqual(fontMenuResults("system", families)[0], null);
 		assert.ok(fontMenuResults("default", families).includes(null));
 		// …and drops out of unrelated queries
 		assert.ok(!fontMenuResults("georgia", families).includes(null));
@@ -42,7 +42,7 @@ describe("fontMenuResults — the DEFAULT row is a candidate, never a ghost pick
 });
 
 describe("composeFontFamily — null/blank = the factory family, otherwise verbatim", () => {
-	it("null → fontFamily null (Source Sans 3 semantics preserved)", () => {
+	it("null → fontFamily null (system-font semantics preserved)", () => {
 		assert.equal(composeFontFamily({ background: "#101010" }, null).fontFamily, null);
 	});
 	it("blank/whitespace → null too", () => {
@@ -120,7 +120,7 @@ describe("the appearance section's font control (thin SSR)", () => {
 		assert.ok(html.includes('aria-expanded="false"'), "the collapsed state");
 		// the old CommitInput is retired
 		assert.ok(!html.includes('data-testid="input-font"'));
-		assert.ok(!html.includes('placeholder="Source Sans 3"'));
+		assert.ok(!html.includes('placeholder="System (SF Pro)"'));
 	});
 
 	it("a stored family shows in the trigger (the record never lies)", () => {
@@ -164,8 +164,8 @@ describe("customFamilyFor — the single-field custom escape (2026-09-26)", () =
 
 	it("a matching family is the better pick — no action row", () => {
 		assert.equal(customFamilyFor("georgia", families), null);
-		// the default row matches too — "source"/"sans"/"default" queries pick it
-		assert.equal(customFamilyFor("source", families), null);
+		// the default row matches too — "system"/"sf"/"default" queries pick it
+		assert.equal(customFamilyFor("system", families), null);
 	});
 
 	it("an empty query is never a custom pick", () => {

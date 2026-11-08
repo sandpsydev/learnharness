@@ -23,7 +23,7 @@
  * it). In a plain dev browser the API is absent → a small curated list
  * + a footer that says exactly that — never a fabricated system list.
  * The custom-family input inside the menu is the manual escape path.
- * Empty/unset keeps meaning Source Sans 3.
+ * Empty/unset keeps meaning the system font.
  *
  * Emphasis inks (same wave): the factory tokens default to the regular
  * text color now (globals.css); the rows' empty-state labels say "same
@@ -45,7 +45,7 @@ import { CommitInput, SettingsMenuTrigger, SettingsRow, ThinSelect, Toggle } fro
 
 /** The factory reading family — the DEFAULT row's identity (unset =
  *  this). Exported for tests. */
-export const DEFAULT_READING_FONT = "Source Sans 3";
+export const DEFAULT_READING_FONT = "System (SF Pro)";
 
 /** The dev-browser fallback list (queryLocalFonts is absent there):
  *  the app's own knowns plus a handful of ubiquitous macOS families,
@@ -78,7 +78,7 @@ function localFontsApi(): LocalFontsApi | null {
 }
 
 /** Compose the reading-font pick: null (or blank) = the factory
- *  Source Sans 3; otherwise the family verbatim (trimmed — the
+ *  the system font; otherwise the family verbatim (trimmed — the
  *  sanitizer trims again server-side). Pure — exported for tests. */
 export function composeFontFamily(
 	appearance: AppearanceSettings | undefined,

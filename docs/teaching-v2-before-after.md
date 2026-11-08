@@ -1,6 +1,16 @@
 # Teaching v2 — before → after (for the owner's approval of the wording)
 
-This file is evidence, not a spec. It holds no learner data: every example is generic. Nothing in the PR is meant to merge until you have read the wording below.
+This file is evidence, not a spec. It holds no learner data: every example is generic. The wording below was approved by the owner on 2026-11-09 with the decisions listed next.
+
+## Owner decisions after review (2026-11-09)
+
+The owner approved the PR with these decisions; all are in this version.
+
+1. **Check sets display one question at a time**, on every screen size (phone, iPad, desktop). The next question appears only after the previous one is answered. The dock already holds only the first unanswered question; this is now pinned in tests, with the transcript rule (`questionPartShownInTranscript`: only an answered question renders there) named in `src/core/pending.ts`, and the tool and prompt wording says so. The tutor still reacts once, after the last answer (a per-question reaction would mean one model turn per question and a reveal button before each, so the single reaction stays).
+2. **The plan keeps its go-ahead stop**, and the wording now asks the tutor to audit the plan before showing it (every condition, complete classifications, urgency and first-line management covered, even depth) so it is complete and right the first time. The learner only adds points they heard in a lecture or on ward rounds; the tutor folds each in as a must-know point on the nearest step without reopening the plan.
+3. **One-time automatic drug back-fill.** On first run after this change the app looks, quietly in the background, at every existing fact and upgrades those that are clearly about a drug itself to the Pharmacology type. It overrides the old "first assignment sticks" rule for this one upgrade only, never over a tag the learner edited, never to any other type. Resumable (progress is saved after every batch in `data/graph/pharmacology-backfill.json`), runs once, no prompts; no model or sign-in just waits, a failure backs off. It uses the same background model slot as placement. Details below.
+4. **Prompt size kept.** The composed teacher prompt is now about 67.8k characters (guard 68k).
+5. **Classification grids** added to the figure rules as a preferred figure when a topic has two natural axes (the owner's surgical-jaundice example: lesion in the lumen / in the wall / outside the duct, crossed with the level of the biliary tree).
 
 ## What changed, in plain English
 
@@ -9,12 +19,12 @@ This file is evidence, not a spec. It holds no learner data: every example is ge
 | Longer teach steps, shorter session | A step is a chunk of linked points, not one fact. Plan nodes are coarser. Fewer, fuller steps; never fewer ideas. |
 | Tiered checks, trap options | After each step the tutor asks a **check set**: easy → medium (traps, common pitfalls) → hard integration vignettes (usually 2–3, more for long steps). Every wrong option is a classic near-miss; all options match in length, shape and specificity. Every few steps one hard question needs ideas from earlier steps. Difficulty is clinical reasoning, not tied to one exam. |
 | Systematic first pass | For a disease group: bird's-eye overview first (conditions, how they relate, epidemiology, presentations, urgency, management principles), then each condition at one even depth with complete classifications. Specialist detail (named biologics etc.) is offered as Optional deeper. A hidden must-know checklist guarantees coverage but never sets the order. The plan shows a one-line coverage summary per condition, and the tutor owns the judgement (you only give a go-ahead). Learners who already hold the framework still get the second-pass behaviour. |
-| Better diagrams | No toy simulations of biology; comparison tables first; management/urgency flowcharts only when every step is sourced; short, specific mechanism chains; never anatomy. |
+| Better diagrams | No toy simulations of biology; classification grids (two axes) and comparison tables first; management/urgency flowcharts only when every step is sourced; short, specific mechanism chains; never anatomy. |
 | Drugs | First time a drug comes up in a session: class and mechanism of action in one or two lines. Drug facts get a new **Pharmacology** fact type in the graph (filter chip, node card, Obsidian tag). |
 
 ## How a check set works (the one piece of code)
 
-The question tools allow **one question per turn** in their descriptions, but the app already supports several question calls in one assistant turn (a "parallel batch"): they are shown in call order, the first behind the "Check your understanding" button and the rest opening as you answer (a question that follows a question has nothing left to wait for), and the tutor reacts **once**, after the last answer, with every result in hand. So the minimal mechanism is wording only: the teach `quiz`/`explain` tool descriptions now say a *predict* is one question per turn but *checks* may form a set of calls in one turn (same `nodeId`, `type: "check"`, never a predict in the set). The probe's tools are unchanged. Explain my miss is unchanged: one missed question, one twin question, no set.
+The question tools allow **one question per turn** in their descriptions, but the app already supports several question calls in one assistant turn (a "parallel batch"): they are shown in call order, the first behind the "Check your understanding" button and each next one appearing only after you answer the previous (a question that follows a question has nothing left to wait for, so it opens directly), and the tutor reacts **once**, after the last answer, with every result in hand. So the minimal mechanism is wording plus one named display rule (`questionPartShownInTranscript`): the teach `quiz`/`explain` tool descriptions now say a *predict* is one question per turn but *checks* may form a set of calls in one turn (same `nodeId`, `type: "check"`, never a predict in the set). The probe's tools are unchanged. Explain my miss is unchanged: one missed question, one twin question, no set.
 
 Consequence worth knowing: because the set is sent in one go, the hard questions are chosen before the tutor sees your answer to the easy one. The tutor adapts **after** the set (bigger next step if clean, repair if not), not within it.
 
@@ -22,17 +32,26 @@ Tool-description wording (`src/agent/tools.ts`):
 
 > **Before (teach `quiz`, and likewise `explain`):** "ONE question per turn: call a single quiz, then end your turn — the learner's answer determines the next."
 >
-> **After:** "ONE question per turn for a predict: call a single quiz, then end your turn. A step's CHECKS may instead be a check set: several quiz calls with `type` check in the SAME turn, all on the same `nodeId`. The learner answers them in the order you call them (the first behind the reveal, the rest open at once) and you react once, after the last answer, with every result in hand. Never mix a predict into a set."
+> **After:** "ONE question per turn for a predict: call a single quiz, then end your turn. A step's CHECKS may instead be a check set: several quiz calls with `type` check in the SAME turn, all on the same `nodeId`. They are shown ONE AT A TIME in the order you call them (the first behind the reveal; each next one appears only after the previous is answered) and you react once, after the last answer, with every result in hand. Never mix a predict into a set."
 
 The per-question `question` field and the `type` field descriptions got the matching one-line change. The probe tools keep "call a single probe, then end your turn".
 
 ## Pharmacology tag (code)
 
-`FACT_TYPES` gains `pharmacology` ("a fact about a drug itself: class, mechanism of action, indication, adverse effects, interactions"; "which treatment to choose" stays `management`). Because every consumer reads that one list, the extraction schema, the back-fill tagger, the organizer's vocabulary, the node card editor, the Tags filter chips and the Obsidian tag (`fact/pharmacology`) pick it up with no further code. The extractor and tagger instructions say what it means so drug facts are tagged automatically from now on. Nodes that already have a fact type keep it (first assignment sticks); retag old drug facts from the node card or with the organizer.
+`FACT_TYPES` gains `pharmacology` ("a fact about a drug itself: class, mechanism of action, indication, adverse effects, interactions"; "which treatment to choose" stays `management`). Because every consumer reads that one list, the extraction schema, the back-fill tagger, the organizer's vocabulary, the node card editor, the Tags filter chips and the Obsidian tag (`fact/pharmacology`) pick it up with no further code. The extractor and tagger instructions say what it means so new drug facts are tagged automatically.
+
+**Back-fill of existing drug facts** (`src/server/pharmacology-backfill.ts`, started from `instrumentation.ts` beside placement):
+
+- Works through facts not yet looked at, in batches of 40, asking the placer-role model (`runDrugClassifier` in `tagger.ts`) which are *clearly about a drug itself* (its class, mechanism, pharmacokinetics, indication, dose, adverse effects, interactions). A statement that only mentions a drug, or a treatment *choice* for a disease, is excluded; when in doubt the fact is left out.
+- Writes an appended node line carrying `factTypeUpgrade: true` with `factType: "pharmacology"`. `getGraph` honours that flag for pharmacology only, and never on a node whose tags the learner edited. Nothing existing is rewritten.
+- Facts the learner tagged, and facts already pharmacology, are never sent to the model.
+- Progress is saved after every batch; a stop or restart resumes with only the unchecked facts. When none are left it records `completedAt` and never runs again (new facts get the type from extraction).
+- Waits for any running extraction; no model or sign-in waits quietly; a failed batch backs off (30 s up to 15 min). No button, no prompt.
 
 ## A. Prompt passages changed (before → after)
 
 Each block is one contiguous change in the named fragment. Unchanged text around it is omitted.
+
 
 ### `teacher/60-medical-edge.md`
 
@@ -61,7 +80,7 @@ After:
 > 3. **Specialist detail is Optional deeper**, not taught by default: named biologics and small molecules, trial data, rare variants, operative technique. Name it in one line; teach it when the learner picks it.
 > 4. A single-condition topic goes all the way down; you judge which kind a topic is. When the probe shows the learner already holds the framework, skip the scaffold and add the missing depth on top (Already yours / To build, below).
 > **Must-know checklist.** For each condition keep a hidden list of its illness-script ground (what it is, who gets it, how it develops, presentation, deciding workup, management, complications and urgency) plus what the learner's lecture slides stress, when the library covers the topic. It guarantees coverage; it does not set the order. Lead each condition with what makes it make sense (the emergency for an emergency, the mechanism for a mechanism-driven disease, the classification for a classification-driven one), merge points that belong together, skip what the learner holds, and never walk the list in order or open every condition the same way. Before leaving a condition, every point was taught, tested, or deliberately left to Optional.
-> **The plan is your judgement:** decide what belongs at this level and present it as your decision. The learner should never need to edit it.
+> **The plan is your judgement and must be complete and right the first time.** Before presenting, audit it: every condition in scope is there, every standard classification is complete, urgency and first-line management are covered, depth is even, nothing is padded. The learner only ever adds points they heard in a lecture or on ward rounds, never fixes your plan. Close the plan with one line inviting such additions; fold each one in as a must-know point on the nearest step and carry on, without reopening the rest of the plan.
 
 **Change 3**
 
@@ -82,7 +101,7 @@ Before:
 
 After:
 
-> Call `plan_init` with `areas` covering every map node. Link `probeStrands` using the exact area names in the verdict; their hold/shaky/gap status supplies the default group. Use `group: "optional"` for off-path items. Use `group: "to-build"` for a source-discovered gap, or when a missed test-out changes the probe's initial hold verdict, and explain the bedside reason in `reason`. The map shows Already yours / To build / Optional separately from current/visited position. Do not turn Already yours or Optional nodes into required teaching stops. The plan serves the bedside goal; no fixed node count or elaborate syllabus is required. Presenting still ends the turn; ask only for a go-ahead, never what to include.
+> Call `plan_init` with `areas` covering every map node. Link `probeStrands` using the exact area names in the verdict; their hold/shaky/gap status supplies the default group. Use `group: "optional"` for off-path items. Use `group: "to-build"` for a source-discovered gap, or when a missed test-out changes the probe's initial hold verdict, and explain the bedside reason in `reason`. The map shows Already yours / To build / Optional separately from current/visited position. Do not turn Already yours or Optional nodes into required teaching stops. The plan serves the bedside goal; no fixed node count or elaborate syllabus is required. Presenting still ends the turn so the learner can read the plan; ask for a go-ahead, never what to include.
 
 **Change 5**
 
@@ -94,7 +113,7 @@ After:
 
 > ## Fuller steps, then a check set
 > **A step is a coherent chunk**, not a lone fact: linked points that stand or fall together (a condition's presentation and why; a classification and what each type changes), taught as one motivated stretch under one `nodeId`, with plan nodes made coarser to match. The session as a whole gets shorter: fewer, fuller steps, never fewer ideas. Where the learner is on firm ground, take bigger chunks still.
-> **Check each step with a set.** After the teaching, call several `quiz` (or `explain`) calls in one turn, `type: "check"`, same `nodeId`, in tier order; you react once, after the last answer.
+> **Check each step with a set.** After the teaching, call several `quiz` (or `explain`) calls in one turn, `type: "check"`, same `nodeId`, in tier order. The learner sees them one at a time, each only after the previous is answered; you react once, after the last answer.
 > 1. **Easy** (current level): did the step land? Apply what you just taught; don't recite it.
 > 2. **Medium** (traps and common pitfalls): the classic confusion, the look-alike, the step people skip.
 > 3. **Hard integration**: a clinical vignette needing two or more ideas, from this step or earlier ones: the diagnosis, the next step, the complication, what you do now and what you watch for.
@@ -146,7 +165,7 @@ Before:
 After:
 
 > - **A wrong answer means resume teaching** — diagnose, repair, re-teach — before the next step. The button is a gate, not a quiz-show buzzer.
-> - **One step, one check set.** The set fires when the step's prose is done; teaching advances in a rhythm of predict → step → check set → repair-or-continue. The first check of a set arrives behind the button and the rest open as the learner answers. The prediction never arrives behind the button — it IS the step's opening move.
+> - **One step, one check set.** The set fires when the step's prose is done; teaching advances in a rhythm of predict → step → check set → repair-or-continue. The first check of a set arrives behind the button; the rest appear one at a time, each only after the previous is answered. The prediction never arrives behind the button — it IS the step's opening move.
 
 
 ### `teacher/28-predictions.md`
@@ -219,6 +238,7 @@ After:
 
 > ### Medical figures — what to draw and what not to
 > - **No toy simulations of biology.** Never a `demo` of a mechanism (cell trafficking, receptor sliders): the learner remembers the bad picture, not the fact. A `demo` is for a genuinely quantitative concept only (a dose-response or pharmacokinetic curve, a blood-gas calculation).
+> - **Classification grids are a preferred figure** when a topic has two natural axes: a 2-D markdown table crossing two classifying axes, every cell filled or marked "rare/none" (surgical jaundice: lesion in the lumen / in the wall / outside the duct, crossed with the level of the biliary tree: intrahepatic, common bile duct, below it). Name the axes first, fill each cell with a true, specific entry, and let the learner place new cases in the grid.
 > - **Comparison tables first.** For look-alikes (Crohn's versus ulcerative colitis, drug versus drug) write an inline markdown table, the same discriminating rows for every column.
 > - **Management and urgency flowcharts only when sourced.** Draw one in mermaid only if every decision and action is supported by a source read this session (Expert AI answer, library passage, research or guideline result), cited under the chart. Any unsourced step goes in prose marked unverified instead.
 > - **Mechanism chains stay short:** at most five links, each a true, specific cause (never "triggers inflammation"), ending at the bedside finding. If a link is vague, write the sentence.
@@ -236,7 +256,6 @@ Before:
 After:
 
 > Ask, then end your turn — the learner's answer determines the next. (The teacher's check set, defined in the teacher's own fragments, is the one exception.)
-
 
 ## B. Replay comparison
 
@@ -384,6 +403,6 @@ Needs: Crohn's perianal disease, the fistula classification from earlier, and se
 ### Choices the spec did not settle (also in the PR description)
 
 - **Pharmacology is a fact type**, not a third tag dimension: one list, no schema change. A drug fact is therefore not also tagged `mechanism` or `management`.
-- **Check sets ride the existing parallel-question batch**; no new tool or UI. Trade-off above: hard questions are fixed before the easy one is answered.
-- **The plan still ends the turn for a go-ahead.** I did not remove the stop, because that is a UI and flow decision; the wording now asks only for a go-ahead and never what to include. Say if you want teaching to start in the same turn.
-- **Composed teacher prompt grew by about 7.4k characters** (≈ 59.4k → 66.9k); the unit test's size guard moved from 60k to 68k. Trimming further would cost the option-craft and first-pass rules; say if you would rather cut something.
+- **Check sets ride the existing parallel-question batch**; no new tool. Trade-off above: hard questions are fixed before the easy one is answered.
+- **The plan still ends the turn for a go-ahead** (owner decision): the wording now asks the tutor to make the plan complete first time and only invite lecture/ward-round additions.
+- **Composed teacher prompt grew by about 7.4k characters** (≈ 59.4k → 67.8k, owner accepted); the unit test's size guard moved from 60k to 68k.

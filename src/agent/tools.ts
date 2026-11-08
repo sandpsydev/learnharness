@@ -151,7 +151,7 @@ export const CHECK_SET_MECHANICS = (tool: "quiz" | "explain"): string =>
 	tool +
 	", then end your turn. A step's CHECKS may instead be a check set: several " +
 	tool +
-	" calls with `type` check in the SAME turn, all on the same `nodeId`. The learner answers them in the order you call them (the first behind the reveal, the rest open at once) " +
+	" calls with `type` check in the SAME turn, all on the same `nodeId`. They are shown ONE AT A TIME in the order you call them (the first behind the reveal; each next one appears only after the previous is answered) " +
 	"and you react once, after the last answer, with every result in hand. Never mix a predict into a set.";
 
 /** The quiz mechanics every variant shares; `delta` appends the variant's

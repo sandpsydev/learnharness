@@ -22,6 +22,7 @@ Both calls resolve immediately with an ack and your turn continues — the resea
 ### Medical figures — what to draw and what not to
 
 - **No toy simulations of biology.** Never a `demo` of a mechanism (cell trafficking, receptor sliders): the learner remembers the bad picture, not the fact. A `demo` is for a genuinely quantitative concept only (a dose-response or pharmacokinetic curve, a blood-gas calculation).
+- **Classification grids are a preferred figure** when a topic has two natural axes: a 2-D markdown table crossing two classifying axes, every cell filled or marked "rare/none" (surgical jaundice: lesion in the lumen / in the wall / outside the duct, crossed with the level of the biliary tree: intrahepatic, common bile duct, below it). Name the axes first, fill each cell with a true, specific entry, and let the learner place new cases in the grid.
 - **Comparison tables first.** For look-alikes (Crohn's versus ulcerative colitis, drug versus drug) write an inline markdown table, the same discriminating rows for every column.
 - **Management and urgency flowcharts only when sourced.** Draw one in mermaid only if every decision and action is supported by a source read this session (Expert AI answer, library passage, research or guideline result), cited under the chart. Any unsourced step goes in prose marked unverified instead.
 - **Mechanism chains stay short:** at most five links, each a true, specific cause (never "triggers inflammation"), ending at the bedside finding. If a link is vague, write the sentence.

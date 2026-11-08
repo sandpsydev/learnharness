@@ -256,6 +256,11 @@ export interface GraphNode {
 	 *  and back-fill lines never override it. Edits are appended, so no
 	 *  existing ledger line is ever rewritten. */
 	tagsEdited?: boolean;
+	/** Stored on a node LINE only: this line upgrades the fact type to
+	 *  `pharmacology` over an earlier extraction/back-fill value (the one-time
+	 *  drug back-fill — src/server/pharmacology-backfill.ts). It never
+	 *  overrides a learner edit, and no other value is ever upgraded this way. */
+	factTypeUpgrade?: boolean;
 }
 
 /** sessions.jsonl line — the emission checkpoint for one chat (which chats

@@ -403,7 +403,12 @@ export function simplifyChains(lines: GraphChain[]): GraphChain[] {
 /** A tag-only node line: it names the node by id and carries NO phrasing and
  *  NO provenance, so reading it back (getGraph) changes nothing but the
  *  tags. Appended — an existing ledger line is never rewritten. */
-export function tagLine(node: GraphNode, tags: { systems?: OrganSystem[]; factType?: FactType }, edited: boolean): GraphNode {
+export function tagLine(
+	node: GraphNode,
+	tags: { systems?: OrganSystem[]; factType?: FactType },
+	edited: boolean,
+	options: { upgrade?: boolean } = {},
+): GraphNode {
 	return {
 		id: node.id,
 		name: "",
@@ -413,6 +418,7 @@ export function tagLine(node: GraphNode, tags: { systems?: OrganSystem[]; factTy
 		provenance: [],
 		...tags,
 		...(edited ? { tagsEdited: true } : {}),
+		...(options.upgrade === true ? { factTypeUpgrade: true } : {}),
 	};
 }
 
@@ -455,6 +461,30 @@ export function fillNodeTags(
 		tagged++;
 	}
 	return tagged;
+}
+
+/** Node ids whose tags the learner edited (any edited line locks them). */
+export function learnerTaggedIds(graphStore: Pick<GraphStore, "readNodes">): Set<string> {
+	const ids = new Set<string>();
+	for (const line of graphStore.readNodes()) if (line.tagsEdited === true) ids.add(line.id);
+	return ids;
+}
+
+/** The one-time drug back-fill's write: give these nodes the `pharmacology`
+ *  fact type, OVERRIDING an earlier extraction/back-fill value (the one
+ *  sanctioned exception to "first assignment sticks"). Skips unknown ids, nodes
+ *  the learner edited, and nodes already pharmacology. Returns the ids changed. */
+export function upgradeToPharmacology(graphStore: Pick<GraphStore, "readNodes" | "readChains" | "appendNode">, ids: Iterable<string>): string[] {
+	const byId = new Map(getGraph(graphStore).nodes.map((n) => [n.id, n]));
+	const locked = learnerTaggedIds(graphStore);
+	const changed: string[] = [];
+	for (const id of ids) {
+		const node = byId.get(id);
+		if (!node || locked.has(id) || node.factType === "pharmacology") continue;
+		graphStore.appendNode(tagLine(node, { factType: "pharmacology" }, false, { upgrade: true }));
+		changed.push(id);
+	}
+	return changed;
 }
 
 // ─── derivation (reads only — everything below is recomputable) ─────────────
@@ -507,6 +537,10 @@ export function getGraph(graphStore: Pick<GraphStore, "readNodes" | "readChains"
 		} else if (!tagsLocked.has(line.id)) {
 			if (existing.systems === undefined && lineTags.systems !== undefined) existing.systems = lineTags.systems;
 			if (existing.factType === undefined && lineTags.factType !== undefined) existing.factType = lineTags.factType;
+			// The one sanctioned override of "first assignment sticks": the drug
+			// back-fill's upgrade to pharmacology. Never over a learner edit
+			// (locked above), never to any other value.
+			else if (line.factTypeUpgrade === true && lineTags.factType === "pharmacology") existing.factType = "pharmacology";
 		}
 		// A later line's statement is a phrasing, not a replacement.
 		for (const phrasing of [line.statement, ...line.aliases]) {

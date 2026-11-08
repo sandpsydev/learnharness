@@ -16,4 +16,7 @@ export async function register() {
 	// Placement (medical fork): keeps every fact placed in the outline, in the background.
 	const { startPlacement } = await import("./src/server/placement.ts");
 	startPlacement();
+	// Drug facts (medical fork): one-time, resumable upgrade of existing drug facts to the pharmacology type.
+	const { startPharmacologyBackfill } = await import("./src/server/pharmacology-backfill.ts");
+	startPharmacologyBackfill();
 }

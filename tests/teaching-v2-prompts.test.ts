@@ -40,6 +40,20 @@ describe("teaching v2 prompt rules", () => {
 		}
 	});
 
+	it("a check set is shown one question at a time, and the plan is complete and right first time", () => {
+		for (const text of [
+			"one at a time, each only after the previous is answered",
+			"each only after the previous is answered",
+			"must be complete and right the first time",
+			"only ever adds points they heard in a lecture or on ward rounds",
+			"ask for a go-ahead, never what to include",
+		]) assert.ok(teacher.includes(text), text);
+	});
+
+	it("classification grids are a preferred figure when a topic has two natural axes", () => {
+		for (const text of ["Classification grids are a preferred figure", "two natural axes", "surgical jaundice"]) assert.ok(teacher.includes(text), text);
+	});
+
 	it("the first time a drug comes up it gets a class and mechanism introduction", () => {
 		assert.ok(teacher.includes("A drug gets a short introduction the first time it comes up"));
 		assert.ok(teacher.includes("tagged pharmacology"));

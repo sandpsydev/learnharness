@@ -33,6 +33,9 @@ export const EXPERT_PAGE = {
 
 export const ACCESS_HELP = "Sign in to Expert AI and use the university network, then retry. If the page layout differs, copy the prompt and use manual paste-back. The question stays queued.";
 
+/** The page cannot enable Send while it is hidden (minimized window or a background tab). Not a sign-in problem. */
+export const HIDDEN_HELP = "The Expert AI page is hidden from the browser (its window is minimized or completely covered), so the site would not enable Send.";
+
 function shown(element: Element | null): element is HTMLElement {
   if (!element || !element.isConnected) return false;
   const view = element.ownerDocument.defaultView;

@@ -5,7 +5,7 @@ import { errorMessage } from "./types";
 import type { ActiveQuestion, Answer, Highlight, QueueItem, SessionState } from "./types";
 
 /** `untouched` means it is certain nothing was filled or submitted. */
-export interface PageResult { ok: boolean; submitted: boolean; untouched?: boolean; error?: string }
+export interface PageResult { ok: boolean; submitted: boolean; untouched?: boolean; error?: string; /** The page was hidden from the browser, which is not a sign-in problem. */ hidden?: boolean }
 /** What the managed tab proves about a question whose outcome was lost. */
 export interface Evidence { verdict: "sent" | "not-sent" | "busy" | "unknown"; why: string; tabId?: number }
 export interface ControllerPorts {
@@ -79,12 +79,14 @@ export class ExtensionController {
     }
     if (automatic && verifyPromptProblems(item.prompt).length) throw new Error("The queued prompt failed the identifier check. Rewrite it in LearnHarness before retrying.");
     const active: ActiveQuestion = { item, requestId: crypto.randomUUID(), phase: "starting", automatic, startedAt: Date.now() };
-    await this.ports.write({ ...state, active, notice: automatic ? "Asking Expert AI in the background…" : "Opening your visible Expert AI tab…" });
+    await this.ports.write({ ...state, active, notice: automatic ? "Asking Expert AI in its own window…" : "Opening your visible Expert AI tab…" });
     let result: PageResult;
     let tabId: number;
     try {
       tabId = active.tabId = await this.ports.focusExpert(automatic);
-      state.managedTabId = (await this.ports.read()).managedTabId;
+      const managed = await this.ports.read();
+      state.managedTabId = managed.managedTabId;
+      state.managedWindowId = managed.managedWindowId;
       await this.ports.write({ ...state, active });
     } catch (error) {
       result = { ok: false, submitted: false, untouched: true, error: errorMessage(error) };
@@ -125,7 +127,9 @@ export class ExtensionController {
   /** Nothing reached Expert AI: go back to how things were and leave the item queued. */
   private async stopCleanly(before: SessionState, result: PageResult, filled = false): Promise<never> {
     const what = filled ? "The question was filled in but never submitted (the draft was cleared)" : "Nothing was sent to Expert AI";
-    const next = filled ? "Fix what the page reported, then save extension settings to try again." : "If Expert AI asks you to sign in, sign in there, then click Ask in Expert AI again.";
+    const next = result.hidden ? "Un-minimize or uncover the separate Expert AI window the extension opened (leave it open), then save extension settings to try again."
+      : filled ? "Fix what the page reported, then save extension settings to try again."
+      : "If Expert AI asks you to sign in, sign in there, then click Ask in Expert AI again.";
     const notice = `${what} and the question is still queued. ${next} (${result.error ?? "The page was not ready."})`;
     await this.ports.write({ ...before, notice });
     throw new Error(notice);

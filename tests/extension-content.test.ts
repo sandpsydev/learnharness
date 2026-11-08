@@ -17,10 +17,13 @@ type Listener = (message: unknown, sender: unknown, respond: (reply: unknown) =>
 type PageReply = { ok: boolean; submitted: boolean; untouched?: boolean; error?: string };
 const bundled = build({ entryPoints: [new URL("../extension/content.ts", import.meta.url).pathname], bundle: true, write: false, format: "iife", platform: "browser" });
 
-async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverSendable?: boolean; background?: boolean; automatic?: boolean; begin?: (request: unknown) => unknown } = {}) {
+async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverSendable?: boolean; background?: boolean; unfocused?: boolean; visibleAfterReads?: number; hideAfterBegin?: boolean; sendNeedsVisible?: boolean; automatic?: boolean; begin?: (request: unknown) => unknown } = {}) {
   const { document, Event: FixtureEvent } = parseHTML(fixture);
-  Object.defineProperty(document, "visibilityState", { value: options.background ? "hidden" : "visible" });
-  document.hasFocus = () => !options.background;
+  // A hidden page (background tab, minimized window) can come back; a merely unfocused one is still visible.
+  let reads = 0;
+  let hidden = Boolean(options.background);
+  Object.defineProperty(document, "visibilityState", { get: () => { if (hidden && options.visibleAfterReads !== undefined && ++reads > options.visibleAfterReads) hidden = false; return hidden ? "hidden" : "visible"; } });
+  document.hasFocus = () => !options.background && !options.unfocused;
   // Closed shells still have a browser client rectangle, but no height.
   document.querySelectorAll<HTMLElement>(".ec-modal").forEach((shell) => {
     shell.getClientRects = () => [{ width: 948, height: 0 }] as unknown as DOMRectList;
@@ -29,7 +32,8 @@ async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverS
   if (options.neverFresh) { box.textContent = "Old question"; box.setAttribute("data-empty", "false"); }
   box.addEventListener("input", () => {
     box.setAttribute("data-empty", "false");
-    if (!options.neverSendable) box.closest("form")!.querySelector("button[type=submit]")!.removeAttribute("disabled");
+    // Like the real site, Send only comes alive in a page the browser shows.
+    if (!options.neverSendable && (!options.sendNeedsVisible || document.visibilityState === "visible")) box.closest("form")!.querySelector("button[type=submit]")!.removeAttribute("disabled");
   });
   const log: string[] = [];
   const messages: unknown[] = [];
@@ -59,6 +63,7 @@ async function load(options: { signedOut?: boolean; neverFresh?: boolean; neverS
         if (request.type === "auto-ready") { log.push("ready"); return Promise.resolve({ ok: true }); }
         if (request.type !== "begin") assert.fail("unexpected message");
         log.push("begin");
+        if (options.hideAfterBegin) hidden = true;
         return Promise.resolve(options.begin ? options.begin(request) : { ok: true, data: null });
       } } },
   });
@@ -141,8 +146,8 @@ test("a sign-in screen ends the attempt cleanly and the next question can be ask
 });
 
 
-test("automatic content fills and collects answer plus sources in a hidden unfocused document", async () => {
-  const h = await load({ automatic: true, background: true });
+test("automatic content fills and collects answer plus sources in an unfocused document", async () => {
+  const h = await load({ automatic: true, unfocused: true, sendNeedsVisible: true });
   assert.equal((await h.ask()).ok, true);
   await new Promise((r) => setImmediate(r));
   assert.deepEqual(h.log, ["begin", "fill", "submit"]);
@@ -173,8 +178,8 @@ test("automatic content fills and collects answer plus sources in a hidden unfoc
   assert.equal(h.log.filter((entry) => entry === "submit").length, 1);
 });
 
-test("automatic hidden sign-in failure leaves the page untouched", async () => {
-  const h = await load({ automatic: true, background: true, signedOut: true });
+test("automatic unfocused sign-in failure leaves the page untouched", async () => {
+  const h = await load({ automatic: true, unfocused: true, signedOut: true });
   const result = await h.ask();
   assert.equal(result.untouched, true);
   assert.equal(result.submitted, false);
@@ -190,13 +195,47 @@ test("manual content still refuses hidden unfocused runs", async () => {
   assert.deepEqual(h.log, []);
 });
 
-test("an automatic fill that never becomes sendable clears the draft, proves nothing was sent, and names the background tab", async () => {
-  const h = await load({ automatic: true, background: true, neverSendable: true });
+test("an automatic fill that never becomes sendable clears the draft and proves nothing was sent", async () => {
+  const h = await load({ automatic: true, unfocused: true, neverSendable: true });
   const result = await h.ask();
   assert.equal(result.ok, false);
   assert.equal(result.submitted, false, "Send was never pressed");
   assert.equal(result.untouched, false, "text had been filled in");
-  assert.match(result.error!, /background/i);
+  assert.match(result.error!, /did not show the expected/);
+  assert.equal(h.log.includes("submit"), false);
+  assert.equal(h.document.querySelector('[contenteditable="true"]')!.textContent, "", "the unsent draft was cleared");
+});
+
+// The owner's failure: a page the browser hides never gets a live Send button.
+test("an automatic page that stays hidden is left untouched with an accurate message that does not blame sign-in", async () => {
+  for (const signedOut of [false, true]) {
+    const h = await load({ automatic: true, background: true, sendNeedsVisible: true, signedOut });
+    const result = await h.ask() as PageReply & { hidden?: boolean };
+    assert.equal(result.ok, false);
+    assert.equal(result.submitted, false);
+    assert.equal(result.untouched, true, "nothing was filled");
+    assert.equal(result.hidden, true);
+    assert.match(result.error!, /hidden.*minimized or completely covered/);
+    assert.doesNotMatch(result.error!, /sign in|university network/i);
+    assert.deepEqual(h.log, [], "no begin, no fill, no submit");
+  }
+});
+
+test("an automatic page that becomes visible shortly after opening is then filled and sent once", async () => {
+  const h = await load({ automatic: true, background: true, sendNeedsVisible: true, visibleAfterReads: 5 });
+  const result = await h.ask();
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(h.log, ["begin", "fill", "submit"]);
+});
+
+test("an automatic page that goes hidden mid-fill clears the draft and says the page was hidden, not that sign-in is needed", async () => {
+  const h = await load({ automatic: true, sendNeedsVisible: true, hideAfterBegin: true });
+  const result = await h.ask() as PageReply & { hidden?: boolean };
+  assert.equal(result.ok, false);
+  assert.equal(result.submitted, false);
+  assert.equal(result.untouched, false);
+  assert.equal(result.hidden, true);
+  assert.doesNotMatch(result.error!, /sign in|university network/i);
   assert.equal(h.log.includes("submit"), false);
   assert.equal(h.document.querySelector('[contenteditable="true"]')!.textContent, "", "the unsent draft was cleared");
 });

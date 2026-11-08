@@ -56,11 +56,7 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
     contextMenus: { removeAll(fn: () => void) { fn(); }, create() {}, onClicked: { addListener() {} } },
     commands: { onCommand: { addListener() {} } },
     tabs: {
-      async create(value: { url: string; active: boolean }) {
-        assert.equal(value.active, false, "automatic work must not activate a tab");
-        const tab = { id: 99, windowId: 2, active: false, url: value.url };
-        tabs.set(99, tab); return tab;
-      },
+      async create() { assert.fail("automatic work opens a window of its own, never a background tab"); },
       async get(tabId: number) { if (!tabs.has(tabId)) throw new Error("Tab closed"); return tabs.get(tabId); },
       async query() { assert.fail("automatic work must not choose any existing learner tab"); },
       async update() { assert.fail("automatic work must not activate a tab"); },
@@ -102,7 +98,13 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
       },
     },
     windows: {
-      async get() { assert.fail("automatic runs must not require a focused window"); },
+      async create(value: { url: string; focused: boolean; type: string }) {
+        assert.equal(value.focused, false, "automatic work must not take focus");
+        assert.equal(value.type, "normal");
+        const tab = { id: 99, windowId: 2, active: true, url: value.url };
+        tabs.set(99, tab); return { id: 2, focused: false, state: "normal", tabs: [tab] };
+      },
+      async get() { return { id: 2, focused: false, state: "normal" }; },
       async getLastFocused() { assert.fail("automatic runs must not consult learner focus"); },
       async update() { assert.fail("automatic runs must not focus any window"); },
     },
@@ -156,7 +158,7 @@ async function fixture(options: { automatic?: boolean; signedOut?: boolean; unce
     pageFails: (error: string | undefined) => { askFails = error; },
     /** The state an extension reload leaves: local storage keeps the guard, session storage is gone. */
     leftBehind: (phase: "starting" | "manual" | "uncertain" | "asked", cause?: string) => {
-      tabs.set(99, { id: 99, windowId: 2, active: false, url: DEFAULT_CONFIG.expertUrl });
+      tabs.set(99, { id: 99, windowId: 2, active: true, url: DEFAULT_CONFIG.expertUrl });
       local.attempt = { item: queue[0], requestId: "old-request", tabId: 99, automatic: true, startedAt: Date.now() - 600_000, phase, ...(cause ? { cause } : {}) };
       session.state = undefined;
     },
@@ -288,12 +290,12 @@ test("a browser restart that clears session storage preserves the no-resubmit gu
 
 test("a fill that never reaches Send stops cleanly with its specific reason and leaves nothing to release", async () => {
   const h = await fixture();
-  h.pageFails("Expert AI did not show the expected fresh conversation or submit control. (The managed tab is in the background, where the page may not update.)");
+  h.pageFails("Expert AI did not show the expected fresh conversation or submit control. (The Expert AI page is hidden from the browser.)");
   h.tick(); await h.until(() => Boolean(h.session.state?.automaticPaused));
   assert.equal(h.session.state!.active, undefined, "no stuck binding for the learner to release");
   assert.equal(h.local.attempt, null, "the durable guard is cleared because nothing was sent");
   assert.equal(h.queue[0]!.status, "queued");
-  assert.match(h.session.state!.automaticPaused!, /filled in but never submitted.*background/s);
+  assert.match(h.session.state!.automaticPaused!, /filled in but never submitted.*hidden/s);
   assert.equal(h.calls.some((c) => c.endsWith("/asked")), false);
   // Once the page can send, saving settings is all it takes.
   h.pageFails(undefined);

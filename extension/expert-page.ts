@@ -137,7 +137,8 @@ export function fillQuestion(doc: Document, prompt: string, automatic = false) {
   const box = questionBox(doc);
   if (!conversationIsFresh(doc)) throw new Error("Step failed: starting a new conversation. Wait for an empty new conversation before filling the prompt. Use manual paste-back if needed.");
   const mode = box.closest("form")?.querySelector('[data-e2e="output-mode-menu-trigger"]');
-  if (!shown(mode ?? null) || mode?.textContent?.replace(/\s+/g, " ").trim() !== "Standard") {
+  // The current page has a single mode and no menu; only refuse when a menu is shown and is not Standard.
+  if (mode && shown(mode) && mode.textContent?.replace(/\s+/g, " ").trim() !== "Standard") {
     throw new Error("Switch Expert AI to Standard, then retry.");
   }
   box.focus();

@@ -32,6 +32,9 @@ export const PATHS = {
 	/** Images the learner pastes or drops into the chat box (Explain my miss
 	 *  and any other session): saved here, then attached by path. */
 	attachments: path.join(DATA_ROOT, "attachments"),
+	/** Real figures the figure finder fetched or rendered (medical fork): one folder
+	 *  per session, deleted with it. Served by app/api/figures. */
+	figures: path.join(DATA_ROOT, "figures"),
 	/** Review mode (medical fork): the illness scripts the app has written,
 	 *  their images, and the illness list — LearnHarness's own copy, from
 	 *  which the Obsidian notes are rendered. */
@@ -63,6 +66,8 @@ export type ModelRole =
 	| "demoBuilder"
 	| "visualMaker"
 	| "pdfReader"
+	/** Finds a real figure (lecture slide, Radiopaedia, open atlas) and checks it by looking (medical fork). */
+	| "figureFinder"
 	| "extractor"
 	| "auditor"
 	/** The knowledge-organizer on the graph page (medical fork). */

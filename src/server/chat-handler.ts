@@ -12,9 +12,10 @@ import { nativeSubscriptionError } from "../agent/subscription-stream.ts";
 import { chatGPTStreamError } from "../agent/chatgpt-stream.ts";
 import { SubscriptionRequestCycle, type SubscriptionDispatchLifecycle } from "../agent/subscription-request-cycle.ts";
 import { reconstructRequestCause } from "../core/native-messages.ts";
+import { getHeadless } from "../agent/subagents/headless.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
-import type { ModelRole } from "../../config.ts";
+import { PATHS, type ModelRole } from "../../config.ts";
 import {
 	deliverJobResult,
 	noteSteersDurable,
@@ -114,6 +115,16 @@ const jobRunner = createJobRunner({
 	// null = honestly unavailable; the dispatch-level drop (below) uses the
 	// same signal so keyless servers never see the research tool at all.
 	searchProvider,
+	// Real figures (medical fork): the learner's library for slides, the session
+	// picture cache, the search engine and the page renderer.
+	figureEnv: () => ({
+		cacheRoot: PATHS.figures,
+		...(library.reader.hasBooks()
+			? { library: { reader: library.reader, pdfPath: (bookId: string) => stores.libraryStore.pdfPath(bookId) } }
+			: {}),
+		search: searchProvider,
+		headless: getHeadless,
+	}),
 });
 /** The app's ONE extraction pipeline instance — both front doors share it:
  *  quiz-triggered session runs (turn-service) and notes imports

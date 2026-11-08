@@ -5,6 +5,7 @@ import type { PdfResult, ResearchResult, SubagentArtifactData } from "@/src/core
 import type { LhViewMessage } from "@/src/core";
 import { isSubagentFailure } from "@/src/core";
 import { DemoOutputCard } from "@/components/artifacts/demo-card";
+import { FigureOutputCard } from "@/components/artifacts/figure-card";
 import { PdfBriefCard, ResearchBriefCard } from "@/components/artifacts/job-card";
 import { VisualOutputCard } from "@/components/artifacts/visual-card";
 
@@ -21,6 +22,7 @@ import { VisualOutputCard } from "@/components/artifacts/visual-card";
  *     too long to inline by default and the teacher's wake turn weaves it
  *     into the lesson anyway. Failures keep the failure card (the brief
  *     explains what went wrong).
+ *   figure — a real picture with its credit and licence (or links), see figure-card.tsx.
  *   demo / visual — the artifact itself (sandboxed iframe / sanitized SVG).
  *     The sub-agent's verification notes are model-facing glue and do NOT
  *     render; only a failure note does.
@@ -57,6 +59,8 @@ export function SubagentSteerCard({ message }: { message: LhViewMessage }) {
 			);
 		case "demo":
 			return <DemoOutputCard output={data.result} messageId={message.id} initialInverted={data.ui?.inverted ?? false} />;
+		case "figure":
+			return <FigureOutputCard output={data.result} />;
 		case "visual":
 			return <VisualOutputCard output={data.result} messageId={message.id} initialInverted={data.ui?.inverted ?? false} />;
 	}

@@ -7,6 +7,8 @@ import {
 	piUsageToStep,
 	type DemoResult,
 	type DemoToolInput,
+	type FigureResult,
+	type FigureToolInput,
 	type JobKind,
 	type JobRecord,
 	type JobUsage,
@@ -27,6 +29,7 @@ import type { ModelRole } from "../../../config.ts";
 import { ROLE_SLOT, modelsNotConfigured, type ModelSlotName, type ProviderKeyMissing } from "../../core/settings.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
 import { runDemoBuilder } from "./demo-builder.ts";
+import { failedResult, runFigureFinder, type FigureFinderEnv } from "./figure-finder.ts";
 import { runPdfReaderAgent } from "./pdf-reader.ts";
 import { runResearcherAgent } from "./researcher.ts";
 import { runVisualMaker } from "./visual-maker.ts";
@@ -60,9 +63,10 @@ export const researchModelOverride: { current?: PiEngine } = {};
 export const demoModelOverride: { current?: PiEngine } = {};
 export const visualModelOverride: { current?: PiEngine } = {};
 export const pdfModelOverride: { current?: PiEngine } = {};
+export const figureModelOverride: { current?: PiEngine } = {};
 
 /** The dispatch-time tool input (from src/agent/tools/jobs.ts schemas). */
-type JobToolInput = ResearchToolInput | DemoToolInput | VisualToolInput | PdfToolInput;
+type JobToolInput = ResearchToolInput | DemoToolInput | VisualToolInput | PdfToolInput | FigureToolInput;
 
 export interface JobRunnerDeps {
 	chatStore: ChatStore;
@@ -92,6 +96,10 @@ export interface JobRunnerDeps {
 	 *  Injected because the agent layer may not read the key store; absent
 	 *  in tests that inject engines directly (test engines never owe a key). */
 	providerKeyMissing?: (provider: string, tier: ModelSlotName) => ProviderKeyMissing | null;
+	/** What the figure finder works with (the learner's library, the picture cache,
+	 *  the search engine, the page renderer). Absent = the library and the cache are
+	 *  not wired, and a figure job fails honestly. */
+	figureEnv?: (chatId: string) => Omit<FigureFinderEnv, "chatId"> | undefined;
 }
 
 export interface JobRunner {
@@ -123,6 +131,7 @@ const KIND_ROLE: Record<JobKind, ModelRole> = {
 	demo: "demoBuilder",
 	visual: "visualMaker",
 	pdf: "pdfReader",
+	figure: "figureFinder",
 };
 
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
@@ -174,6 +183,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			demoBuilder: demoModelOverride,
 			visualMaker: visualModelOverride,
 			pdfReader: pdfModelOverride,
+			figureFinder: figureModelOverride,
 		};
 		return testOverride[KIND_ROLE[kind]]?.current ?? deps.engineFor?.(KIND_ROLE[kind]);
 	}
@@ -186,6 +196,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		demo: (jobId, engine, input, loop) => runDemoJob(jobId, engine, input, loop),
 		visual: (jobId, engine, input, loop) => runVisualJob(jobId, engine, input, loop),
 		pdf: (jobId, engine, input, loop) => runPdfJob(jobId, engine, input, loop),
+		figure: (jobId, engine, input, loop) => runFigureJob(jobId, engine, input, loop),
 	};
 
 	async function runJob(jobId: string, input?: JobToolInput): Promise<void> {
@@ -217,9 +228,10 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 				| DemoToolInput
 				| VisualToolInput
 				| PdfToolInput
+				| FigureToolInput
 				| undefined;
 			const pdf = resolved as PdfToolInput | undefined;
-			const failure: ResearchResult | DemoResult | VisualResult | PdfResult =
+			const failure: ResearchResult | DemoResult | VisualResult | PdfResult | FigureResult =
 				job.kind === "research"
 					? { brief: `Research failed: ${reason}`, sources: [] }
 					: job.kind === "demo"
@@ -231,7 +243,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 							}
 						: job.kind === "visual"
 							? { svg: "", notes: `FAILED: ${reason}` }
-							: {
+							: job.kind === "figure"
+								? failedResult({ concept: typeof (resolved as FigureToolInput | undefined)?.concept === "string" ? (resolved as FigureToolInput).concept : "" }, reason)
+								: {
 									path: typeof pdf?.path === "string" ? pdf.path : "",
 									question: typeof pdf?.question === "string" ? pdf.question : "",
 									brief: `PDF failed: ${reason}`,
@@ -300,7 +314,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	 * Save the computation outcome and session delivery obligation together.
 	 * Worker liveness ends after cleanup, not after a lesson consumes the result.
 	 */
-	async function finishJob(jobId: string, result: ResearchResult | DemoResult | VisualResult | PdfResult): Promise<void> {
+	async function finishJob(jobId: string, result: ResearchResult | DemoResult | VisualResult | PdfResult | FigureResult): Promise<void> {
 		const job = jobStore.getJob(jobId);
 		if (!job) return;
 		// Aborted mid-run (abortJob flips the record before
@@ -514,6 +528,55 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			const reason = err instanceof Error ? err.message : String(err);
 			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
 			await finishJob(jobId, { path, question, brief: `PDF failed: ${reason}`, pagesRead: [], pagesConsulted: [] });
+		}
+	}
+
+	// ─── figure finding (medical fork) ───────────────────────────────────────
+
+	async function runFigureJob(
+		jobId: string,
+		model: PiEngine | undefined,
+		passedInput: JobToolInput | undefined,
+		loop: LoopContext,
+	): Promise<void> {
+		const ctx = jobContext(jobId);
+		if (!ctx) return;
+		const { job } = ctx;
+
+		const input = (passedInput ?? resolveInput(job, passedInput)) as FigureToolInput | undefined;
+		const concept = typeof input?.concept === "string" ? input.concept.trim() : "";
+		if (!concept) {
+			jobStore.updateJob(jobId, { error: "figure concept unavailable" });
+			await finishJob(jobId, failedResult({ concept: "" }, "the figure request is unavailable."));
+			return;
+		}
+		const figureInput: FigureToolInput = {
+			concept,
+			...(typeof input?.modality === "string" && input.modality.trim() ? { modality: input.modality.trim() } : {}),
+			...(typeof input?.context === "string" && input.context.trim() ? { context: input.context.trim() } : {}),
+		};
+		const env = deps.figureEnv?.(job.chatId);
+		if (!env) {
+			jobStore.updateJob(jobId, { error: "figure lookup is not wired" });
+			await finishJob(jobId, failedResult(figureInput, "figure lookup is not available in this build."));
+			return;
+		}
+
+		try {
+			jobStore.updateJob(jobId, { activity: "looking for a figure" });
+			const result = await runFigureFinder(figureInput, {
+				engine: model,
+				env: { ...env, chatId: job.chatId },
+				abortSignal: loop.abortSignal,
+				onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
+				onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
+			});
+			await finishJob(jobId, result);
+		} catch (err) {
+			if (loop.abortSignal.aborted) return;
+			const reason = err instanceof Error ? err.message : String(err);
+			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
+			await finishJob(jobId, failedResult(figureInput, reason));
 		}
 	}
 

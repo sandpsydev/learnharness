@@ -22,7 +22,7 @@ export interface JobToolContext {
 	/** Fire the background runner for a fresh job — fire-and-forget. The
 	 *  input rides along because the spawn happens MID-STREAM, before
 	 *  onFinish persists the tool part — a transcript scan would race it. */
-	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput) => void;
+	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput | FigureInput) => void;
 	/** Search-provider availability, retained for existing composition seams.
 	 *  Research dispatch does not depend on it: web_fetch is keyless and
 	 *  web_search reports a missing provider as a recoverable tool result. */
@@ -66,6 +66,18 @@ export const pdfInputSchema = Type.Object({
 	}),
 });
 
+export const figureInputSchema = Type.Object({
+	concept: Type.String({
+		description:
+			"What the picture must show, specifically — 'left-sided pneumothorax with a visible visceral pleural line on an erect chest X-ray'. " +
+			"The finder sees NOTHING else of the lesson.",
+	}),
+	modality: Type.Optional(
+		Type.String({ description: "The kind of picture, to aim the search: chest X-ray, CT, MRI, ultrasound, histology, skin, fundus, ECG, gross anatomy…" }),
+	),
+	context: Type.Optional(Type.String({ description: "Why the lesson needs it — one sentence." })),
+});
+
 /**
  * The per-call dispatch: create the job (idempotent by toolCallId), fire the
  * runner, and return the ack. Shared by all three tools — only kind differs.
@@ -75,7 +87,7 @@ function dispatch(
 	kind: JobRecord["kind"],
 	toolCallId: string,
 	ack: string,
-	input: ResearchInput | DemoInput | VisualInput | PdfInput,
+	input: ResearchInput | DemoInput | VisualInput | PdfInput | FigureInput,
 ): string {
 	const existing = ctx.jobStore.findJobByToolCallId(ctx.chatId, toolCallId);
 	const job = existing ?? ctx.jobStore.createJob({ kind, chatId: ctx.chatId, toolCallId, input });
@@ -92,6 +104,9 @@ const DEMO_ACK =
 const VISUAL_ACK =
 	"This call is fire-and-forget: continue your turn and keep teaching — do not wait, poll, or mention waiting. " +
 	"The verified figure arrives as a new message when ready and is rendered in the lesson; reference it then.";
+const FIGURE_ACK =
+	"This call is fire-and-forget: continue your turn and keep teaching — do not wait, poll, or mention waiting. " +
+	"A real figure (or links, when none can be shown) arrives as a new message and is shown in the lesson; name what it shows and point at the key feature then.";
 const PDF_ACK =
 	"This call is fire-and-forget: continue your turn and keep teaching — do not wait, poll, or mention waiting. " +
 	"The document brief arrives as a new message when ready; weave it into the lesson and cite its pages.";
@@ -119,6 +134,12 @@ const PDF_DESCRIPTION =
 	"and you need its CONTENT for the lesson. The call is ASYNC and fire-and-forget — it resolves immediately and your turn " +
 	"continues; the brief arrives later as a new message. For quick looks at plain text or image files, use the read tool " +
 	"directly instead of dispatching.";
+
+const FIGURE_DESCRIPTION =
+	"Dispatch a background agent that finds a REAL figure for the lesson — anatomy, imaging, histology, a clinical photograph, an ECG — " +
+	"looking first in the learner's own lecture slides, then Radiopaedia, then trusted open atlases and open-access articles. " +
+	"It returns the picture with its credit and licence, or links with a one-line note when no image can be shown. It never draws. " +
+	"The call is ASYNC and fire-and-forget — it resolves immediately and your turn continues; the result arrives later as a new message.";
 
 /**
  * Per-request job tool registry: each tool closes over the composition root's
@@ -155,6 +176,13 @@ export function jobTools(ctx: JobToolContext): Record<string, AgentTool<any>> {
 				dispatch(ctx, "visual", toolCallId, VISUAL_ACK, input),
 			),
 		},
+		figure: {
+			name: "figure",
+			label: "figure",
+			description: FIGURE_DESCRIPTION,
+			parameters: figureInputSchema,
+			execute: serverExecute("figure", figureInputSchema, (input, { toolCallId }) => dispatch(ctx, "figure", toolCallId, FIGURE_ACK, input)),
+		},
 		pdf: {
 			name: "pdf",
 			label: "pdf",
@@ -169,3 +197,4 @@ export type ResearchInput = Static<typeof researchInputSchema>;
 export type DemoInput = Static<typeof demoInputSchema>;
 export type VisualInput = Static<typeof visualInputSchema>;
 export type PdfInput = Static<typeof pdfInputSchema>;
+export type FigureInput = Static<typeof figureInputSchema>;

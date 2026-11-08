@@ -81,7 +81,7 @@ import { NativeSubscriptionBackgroundAccess } from "./subscription-connections";
 const SLOT_META: Record<ModelSlotName, { label: string; roster: string }> = {
 	strong: { label: "Strong", roster: "The main model for your sessions" },
 	cheap: { label: "Cheap", roster: "The assistants that research, build demos, and grade your work" },
-	vision: { label: "Vision", roster: "The assistants that draw and read PDFs" },
+	vision: { label: "Vision", roster: "The assistants that draw, read PDFs and find real figures" },
 };
 
 /** The search engines this wave ships (src/core/search.ts) + their labels. */
@@ -89,7 +89,7 @@ const SEARCH_ENGINES = ["tavily", "brave"] as const;
 
 /** The owner's final toggleable-tool list (confirm with the user before
  *  changing — the Teacher stream settled this 2026-09-19). */
-export const TOGGLE_TOOLS = ["research", "demo", "visual", "pdf"] as const;
+export const TOGGLE_TOOLS = ["research", "demo", "visual", "pdf", "figure"] as const;
 
 const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 

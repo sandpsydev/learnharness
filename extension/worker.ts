@@ -144,6 +144,51 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** How long a just-opened or redirecting managed page may take to reach Expert AI with its script running. */
 const PAGE_READY_MS = 30_000;
 const hostOf = (value: string) => { try { return new URL(value).host; } catch { return "another site"; } };
+/**
+ * Focus the managed window borrows, and who gets it back. `held` means the worker keeps it until
+ * it is released explicitly (through Send); otherwise the page may hand it back after a fill.
+ */
+let borrow: { from?: number; held: boolean } | undefined;
+/** Remember the learner's focused window the first time only, then focus the managed one. */
+async function takeFocus(managedWindow: number, held: boolean, beforeFocus?: () => Promise<unknown>) {
+  if (!borrow) {
+    const before = await chrome.windows.getLastFocused();
+    borrow = { from: before.id !== undefined && before.id !== managedWindow ? before.id : undefined, held };
+  } else borrow.held ||= held;
+  await beforeFocus?.();
+  await chrome.windows.update(managedWindow, { focused: true });
+}
+/** Hand focus back to the window the learner was using. A held borrow is only released with `force`. */
+async function giveBackFocus(force: boolean) {
+  if (!borrow || (borrow.held && !force)) return;
+  const previous = borrow.from;
+  borrow = undefined;
+  if (previous !== undefined) await chrome.windows.update(previous, { focused: true }).catch(() => {});
+}
+/** What the managed page says about itself; an older page script that does not say is taken as visible. */
+async function pageHidden(tabId: number) {
+  try { return (await chrome.tabs.sendMessage(tabId, { type: "lh-ready" }, { frameId: 0 }))?.visible === false; } catch { return false; }
+}
+/** How long a hidden managed page gets to show once its window is restored and focused. */
+const VISIBLE_POLLS = 50;
+const VISIBLE_POLL_MS = 100;
+/**
+ * Make a hidden managed page visible: restore a minimized window and borrow focus (a window that
+ * is completely covered counts as hidden too). Returns false only if the page still is not
+ * visible after that, and then hands focus straight back. Focus stays borrowed on success.
+ */
+async function revealManaged(tabId: number, held = true): Promise<boolean> {
+  if (!(await pageHidden(tabId))) return true;
+  const tab = await chrome.tabs.get(tabId);
+  const win = await chrome.windows.get(tab.windowId);
+  await takeFocus(tab.windowId, held, async () => { if (win.state === "minimized") await chrome.windows.update(tab.windowId, { state: "normal" }); });
+  for (let poll = 0; poll < VISIBLE_POLLS; poll++) {
+    if (!(await pageHidden(tabId))) return true;
+    await delay(VISIBLE_POLL_MS);
+  }
+  await giveBackFocus(true);
+  return false;
+}
 async function submit(tabId: number, item: QueueItem, requestId: string, automatic = false): Promise<PageResult> {
   // Wait for the tab's content script. Never retry a submit.
   attempts.open(requestId, tabId);
@@ -153,8 +198,7 @@ async function submit(tabId: number, item: QueueItem, requestId: string, automat
   for (let attempt = 0; attempt === 0 || Date.now() < deadline; attempt++) {
     const tab = await chrome.tabs.get(tabId);
     const win = await chrome.windows.get(tab.windowId);
-    // Expert AI will not enable Send in a hidden page. Say so rather than blaming the sign-in.
-    if (automatic && win.state === "minimized") return { ok: false, submitted: false, untouched: true, hidden: true, error: HIDDEN_HELP };
+    // A hidden managed page (minimized or covered window) is brought forward below, once its script is up.
     if (!automatic && (!tab.active || !win.focused)) return { ok: false, submitted: false, untouched: true, error: "Keep the Expert AI tab visible and its window focused, then retry." };
     elsewhere = undefined;
     if (tab.url && !isExpertUrl(tab.url)) {
@@ -171,7 +215,14 @@ async function submit(tabId: number, item: QueueItem, requestId: string, automat
   }
   if (!connected && elsewhere) return { ok: false, submitted: false, untouched: true, signedOut: true, error: `The Expert AI window stayed on ${elsewhere}, which is a sign-in or other page, for ${PAGE_READY_MS / 1000} seconds.` };
   if (!connected) return { ok: false, submitted: false, untouched: true, error: `The Expert AI window did not become ready within ${PAGE_READY_MS / 1000} seconds. If it asks you to sign in, sign in there. Otherwise reload it or use manual paste-back.` };
-  return await chrome.tabs.sendMessage(tabId, { type: "lh-ask", prompt: item.prompt, requestId, automatic }, { frameId: 0 });
+  try {
+    // Expert AI will not enable Send in a hidden page, and a covered or minimized window is hidden.
+    // Bring the managed window forward and keep it there until Send has been pressed.
+    if (automatic && !(await revealManaged(tabId))) return { ok: false, submitted: false, untouched: true, hidden: true, error: HIDDEN_HELP };
+    return await chrome.tabs.sendMessage(tabId, { type: "lh-ask", prompt: item.prompt, requestId, automatic }, { frameId: 0 });
+  } finally {
+    if (automatic) await giveBackFocus(true);
+  }
 }
 async function probe(active: ActiveQuestion): Promise<Evidence> {
   const tabId = active.tabId;
@@ -200,12 +251,16 @@ const controller = new ExtensionController({ probe, fenceUnsent, interruptions, 
     if (active.tabId === undefined || (await read()).managedTabId !== active.tabId) throw new Error("The automatic question has no managed tab. Use manual return.");
     const tab = await chrome.tabs.get(active.tabId);
     if (!isExpertUrl(tab.url ?? "")) throw new Error("Sign in to Expert AI in its managed tab, then retry. The extension never signs in.");
-    const reply = await chrome.tabs.sendMessage(active.tabId, { type: "lh-collect", requestId: active.requestId }, { frameId: 0 });
+    const ask = () => chrome.tabs.sendMessage(active.tabId!, { type: "lh-collect", requestId: active.requestId }, { frameId: 0 });
+    let reply = await ask().catch(() => undefined);
+    if (!reply?.ok && await pageHidden(active.tabId)) {
+      // Reading the answer failed in a hidden window: bring it forward just for this read, then hand focus back.
+      try { if (await revealManaged(active.tabId, false)) reply = await ask().catch(() => reply); }
+      finally { await giveBackFocus(true); }
+    }
     if (!reply?.ok) throw new Error(reply?.error ?? "The managed Expert AI page did not respond. Use manual return.");
     return reply.answer;
   }, closeAttempt: async (requestId) => attempts.close(requestId) });
-/** The learner's window that had focus when the managed window borrowed it for a fill. */
-let borrowedFrom: number | undefined;
 const extensionPages = new Set([chrome.runtime.getURL("popup.html"), chrome.runtime.getURL("options.html")]);
 async function handle(message: Request, sender: chrome.runtime.MessageSender) {
   if (sender.id !== chrome.runtime.id) throw new Error("Unknown sender.");
@@ -227,16 +282,9 @@ async function handle(message: Request, sender: chrome.runtime.MessageSender) {
       const state = await read();
       if (!sender.tab?.id || sender.frameId !== 0 || !isExpertUrl(sender.url ?? "") || !state.active?.automatic || state.active.requestId !== message.requestId || state.active.tabId !== sender.tab.id || state.managedTabId !== sender.tab.id) throw new Error("This is not the current automatic question.");
       if (message.type === "focus-fill") {
-        const managed = (await chrome.tabs.get(sender.tab.id)).windowId;
         // Remember who had focus so it can be handed back; never keep it.
-        const before = await chrome.windows.getLastFocused();
-        borrowedFrom = before.id !== undefined && before.id !== managed ? before.id : undefined;
-        await chrome.windows.update(managed, { focused: true });
-      } else if (borrowedFrom !== undefined) {
-        const previous = borrowedFrom;
-        borrowedFrom = undefined;
-        await chrome.windows.update(previous, { focused: true }).catch(() => {});
-      }
+        await takeFocus((await chrome.tabs.get(sender.tab.id)).windowId, false);
+      } else await giveBackFocus(false);
       return null;
     }
     if (message.type === "begin") {

@@ -123,7 +123,7 @@ function adopt(requestId: string, prompt: string) {
 }
 function install() { chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return false;
-  if (message?.type === "lh-ready") { respond({ ok: true }); return false; }
+  if (message?.type === "lh-ready") { respond({ ok: true, visible: document.visibilityState === "visible" }); return false; }
   if (message?.type === "lh-probe") {
     // The worker may inject this script into a tab it did not load with. Report what the
     // page shows; an already-sent prompt is adopted so its answer can be collected.

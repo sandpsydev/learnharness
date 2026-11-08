@@ -41,14 +41,20 @@ can return promptly. One question runs at a time, in a normal Chrome window of i
 own that the extension opens unfocused (`focused: false`), so it does not take
 over the tab you are reading. It cannot be a background tab: Expert AI only
 enables Send in a page the browser shows, and a background tab is hidden. Leave
-that window open, and do not minimize it or cover it completely with other
-windows; it may sit behind your other windows. Automatic runs never activate a
-tab and never choose a learner-owned conversation. The one exception to
-"never takes focus": Expert AI's editor ignores typed text in a window that
-does not have focus, so if the plain fill is ignored the page asks the worker to
-focus the managed window for the fill alone, and the worker hands focus straight
-back to the window you were using. This only happens for the managed window
-and the current automatic question. Subsequent
+that window open; it may sit behind your other windows. Automatic runs never
+activate a tab and never choose a learner-owned conversation. The exception to
+"never takes focus": Chrome treats a managed window that is minimized, or on
+macOS completely covered by another window, as hidden, and Expert AI will not
+enable Send for a hidden page. So before filling, if the page reports itself
+hidden, the worker restores the window if it is minimized, focuses it, and waits
+up to about five seconds for the page to become visible. Focus stays on the
+managed window until Send has been pressed, and is then handed straight back to
+the window you were using (so the managed window may cover or flash over your
+work for the few seconds of a fill, and not while it waits for the answer). A
+page that is already visible is never focused. Likewise, Expert AI's editor
+ignores typed text in a window that does not have focus, so if the plain fill is
+ignored the page asks the worker for focus for the fill alone. Both only happen
+for the managed window and the current automatic question. Subsequent
 questions reuse that managed window, starting a fresh conversation each time. If
 you close it, the next question opens a new one. A managed page left over from an
 older version as a background tab is moved into a window of its own.
@@ -76,11 +82,15 @@ alarms, so launching the app after Chrome needs no popup click. The toolbar
 shows **!**; open the popup for the plain-language reason. An attempt that
 never pressed Send, whether or not the prompt was already typed in, leaves the
 app question queued, clears the typed draft and the local binding, and pauses
-with the page's own reason. If the managed page is hidden (window minimized or
-completely covered), the page waits about ten seconds for it to show, then stops
-without filling anything and says the page is hidden; it does not ask you to sign
-in. Un-minimize or uncover the window and save settings to resume. Nothing is
-left to release. The
+with the page's own reason. A hidden managed page (window minimized or
+completely covered) is restored and brought forward first, as described above, so
+this is not a pause reason in normal use. Only if the page still is not visible
+after that attempt (about five seconds), automatic mode stops without filling
+anything and says the page is hidden; it does not ask you to sign in. Un-minimize
+or uncover the window and save settings to resume. Nothing is left to release.
+Reading a finished answer does not need the window to be visible; if a read
+fails while the page is hidden, the window is brought forward once for that read
+and focus is handed straight back, instead of pausing. The
 extension never signs in, dismisses a site pop-up, or resubmits a question that
 may have been sent. Fix the page or connection yourself, then open extension
 Settings and save with automatic mode on to resume.
@@ -218,7 +228,10 @@ The owner should check this first live automatic run:
    plus source titles/sections. Check both right-pane and bottom-drawer layouts
    when available. The second question should follow in its own fresh conversation.
 4. Leave the popup closed long enough for the worker to sleep, then queue another
-   question. Confirm it still runs. Repeat with the managed window unfocused, and again after closing it (a new one opens).
+   question. Confirm it still runs. Repeat with the managed window unfocused, again after closing it (a new one opens),
+   again with it completely covered by another window, and again minimized: the
+   question should still be filled and sent, the window should come forward only for
+   that, and focus should return to the window you were using.
 5. Test signed-out access or a site pop-up: nothing should fill or submit, the
    question should stay queued, and **!** plus a clear popup notice should appear.
    Sign in/close the pop-up yourself and save settings to resume.

@@ -12,6 +12,7 @@ import { figureImageAllowed, figureSourceById, figureSourceForPage } from "../sr
 import { findCachedFigure, figureKey, readCachedFigure, removeChatFigures, writeCachedFigure } from "../src/agent/figures/cache.ts";
 import { IMAGE_MAX_BYTES, fetchFigureImage, fetchFigureText } from "../src/agent/figures/fetch.ts";
 import {
+	isForeignLabelVariant,
 	parseCommonsResults,
 	parseEuropePmcFigures,
 	parseEuropePmcResults,
@@ -161,9 +162,10 @@ describe("session cache", () => {
 });
 
 describe("Wikimedia Commons", () => {
-	it("lists picture files with their own licence, author and description; skips svg, off-list hosts", () => {
+	it("lists picture files with their own licence, author and description; drawings via their rendered thumbnail; skips off-list hosts", () => {
 		const found = parseCommonsResults(JSON.parse(fixture("commons-search.json")));
-		assert.deepEqual(found.map((c) => c.title), ["Apical pneumothorax shown on CT and chest X-ray.png", "Pneumothorax unfree.jpg"]);
+		assert.deepEqual(found.map((c) => c.title), ["Apical pneumothorax shown on CT and chest X-ray.png", "Pneumothorax unfree.jpg", "Pneumothorax diagram.svg"]);
+		assert.equal(found[2]!.imageUrl, "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a1/Pneumothorax_diagram.svg/1000px-Pneumothorax_diagram.svg.png", "the PNG Commons renders, never the SVG itself");
 		const [first, second] = found;
 		assert.equal(first!.licence?.label, "CC BY-SA 4.0");
 		assert.equal(first!.author, "Jane Roe");
@@ -179,14 +181,50 @@ describe("Wikimedia Commons", () => {
 		const routed = ((url: string, init?: RequestInit) => {
 			log.push(url);
 			assert.ok(url.startsWith("https://commons.wikimedia.org/w/api.php?"));
-			assert.equal(new URL(url).searchParams.get("gsrsearch"), "pneumothorax chest x-ray");
+			assert.equal(new URL(url).searchParams.get("gsrsearch"), "pneumothorax chest x-ray filetype:bitmap|drawing", "pictures and drawings only, never scanned books");
+			assert.equal(new URL(url).searchParams.get("gsrlimit"), "20");
 			return Promise.resolve(ok(fixture("commons-search.json"), "application/json"));
 		}) as unknown as typeof fetch;
 		void f;
 		const out = await searchCommons("pneumothorax chest x-ray", { fetchImpl: routed });
-		assert.ok(out.ok && out.candidates.length === 2);
+		assert.ok(out.ok && out.candidates.length === 3);
 		const failed = await searchCommons("x", { fetchImpl: (async () => new Response("", { status: 429 })) as unknown as typeof fetch });
 		assert.ok(!failed.ok && failed.reason === "blocked");
+	});
+});
+
+describe("Wikimedia Commons: drawings and translated labels (live cases, 2026-11-12)", () => {
+	// Live searches showed: "nephron diagram" — 14 of 20 hits are SVG drawings, many of them translated
+	// label variants; "marginal artery of Drummond" — the one right file ("Colonic blood supply.svg")
+	// is an SVG, and scanned-book PDFs filled 6 of the 8 slots.
+	const found = parseCommonsResults(JSON.parse(fixture("commons-search-drawings.json")));
+	const titles = found.map((c) => c.title);
+
+	it("keeps SVG drawings (through Commons' raster thumbnail) and drops PDFs and drawings with no raster thumbnail", () => {
+		assert.ok(titles.includes("Colonic blood supply.svg"));
+		assert.ok(!titles.some((t) => t.endsWith(".pdf")));
+		assert.ok(!titles.includes("Odd drawing.svg"), "an SVG is never fetched as SVG");
+		for (const c of found) assert.match(c.imageUrl!, /\.(png|jpe?g)$/);
+	});
+
+	it("puts English-labelled files before translated label variants, keeping Commons' order within each", () => {
+		assert.deepEqual(titles, [
+			"Colonic blood supply.svg",
+			"Chest X-ray PA.jpg",
+			"Nefron-EN.svg",
+			"Nephron pl.svg",
+			"Brachial plexus color (vi).svg",
+			"Kidney nephron molar transport diagram.ja.svg",
+		]);
+	});
+
+	it("reads a translated variant from the file name, but never a medical abbreviation", () => {
+		for (const t of ["File:Nephron pl.svg", "Brachial plexus color (vi).svg", "Brachial plexus color - PT.svg", "Iliac artery bifurcation-zh.png", "Kidney nephron molar transport diagram.ja.svg", "Gray1146 - basic japanese version.jpg"]) {
+			assert.equal(isForeignLabelVariant(t), true, t);
+		}
+		for (const t of ["Chest X-ray PA.jpg", "Echo MR.png", "Brain MRI MS.jpg", "Nefron-EN.svg", "Aortic stenosis AS.png", "Breast CA.jpg", "Gray1227.png"]) {
+			assert.equal(isForeignLabelVariant(t), false, t);
+		}
 	});
 });
 

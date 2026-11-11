@@ -65,6 +65,16 @@ export function plainText(html: string): string {
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 const COMMONS_PICTURE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+/**
+ * Files Commons stores in a format the lesson cannot show, but renders to a PNG/JPEG
+ * thumbnail itself. Most anatomy and physiology diagrams on Commons are SVG; only the
+ * rendered thumbnail is ever fetched (and checked to be a real picture by its bytes),
+ * never the drawing's own markup.
+ */
+const COMMONS_THUMB_ONLY_MIMES = new Set(["image/svg+xml", "image/tiff"]);
+/** How many files to ask Commons for; the best are kept after ranking. */
+const COMMONS_FETCH = 20;
+const COMMONS_KEEP = 8;
 
 // ─── Wikimedia Commons ───────────────────────────────────────────────────────
 
@@ -77,8 +87,9 @@ export function commonsSearchUrl(query: string): string {
 		format: "json",
 		generator: "search",
 		gsrnamespace: "6",
-		gsrsearch: query,
-		gsrlimit: "8",
+		// Pictures and drawings only: without this, scanned books (PDF/DjVu) fill most results.
+		gsrsearch: `${query} filetype:bitmap|drawing`,
+		gsrlimit: String(COMMONS_FETCH),
 		prop: "imageinfo",
 		iiprop: "url|extmetadata|mime|size",
 		iiurlwidth: "1000",
@@ -94,7 +105,25 @@ const metaText = (meta: Meta | undefined, key: string): string => {
 	return typeof value === "string" ? plainText(value) : "";
 };
 
-/** The Commons API answer → candidates (picture files only; svg, audio, pdf are skipped). */
+/** Language codes Commons uploaders put in the names of translated label variants ("Nephron pl.svg", "Brachial plexus color (vi).svg"). */
+// Codes that are also common medical abbreviations at the end of a file name (AR, MR, MS, PA,
+// LA, PS, TR, ET, SV, HR, CA…) are left out on purpose, so "Chest X-ray PA" is never demoted.
+const LABEL_LANGUAGES =
+	"ast|az|bg|bn|bs|cs|da|de|es|eu|fa|fi|fr|gl|he|hu|hy|ja|ka|kk|ko|ku|lt|lv|mk|nb|nl|nn|pl|pt|pt-br|ro|ru|sk|sl|sq|sr|th|uk|uz|vi|zh|zh-hans|zh-hant|zh-cn|zh-tw";
+const LABEL_VARIANT = new RegExp(`(?:[\\s_.-]|\\()(?:${LABEL_LANGUAGES})\\)?$`, "i");
+const LANGUAGE_WORD = /\b(?:arabic|chinese|french|german|italian|japanese|korean|persian|polish|portuguese|russian|spanish|thai|turkish|vietnamese)\b/i;
+
+/** True when a Commons file name marks a translated (non-English) label variant. */
+export function isForeignLabelVariant(title: string): boolean {
+	const base = title.replace(/^File:/, "").replace(/\.[a-z0-9]+$/i, "").trim();
+	return LABEL_VARIANT.test(base) || LANGUAGE_WORD.test(base);
+}
+
+/**
+ * The Commons API answer → candidates: picture files, and SVG/TIFF drawings through the PNG
+ * thumbnail Commons renders for them (audio, video, PDF and DjVu are skipped). The lesson is in
+ * English, so translated label variants of a drawing go after every other result.
+ */
 export function parseCommonsResults(json: unknown): FigureCandidateDraft[] {
 	const pages = (json as { query?: { pages?: Record<string, unknown> } } | null)?.query?.pages;
 	if (!pages || typeof pages !== "object") return [];
@@ -106,12 +135,16 @@ export function parseCommonsResults(json: unknown): FigureCandidateDraft[] {
 		const info = page.imageinfo?.[0];
 		if (!info || typeof page.title !== "string") continue;
 		const mime = typeof info.mime === "string" ? info.mime : "";
-		if (!COMMONS_PICTURE_MIMES.has(mime)) continue;
+		const thumbOnly = COMMONS_THUMB_ONLY_MIMES.has(mime);
+		if (!COMMONS_PICTURE_MIMES.has(mime) && !thumbOnly) continue;
 		const meta = info.extmetadata as Meta | undefined;
 		const licence = readFigureLicence(
 			[metaText(meta, "LicenseShortName"), metaText(meta, "License"), (meta?.LicenseUrl?.value as string | undefined) ?? "", metaText(meta, "UsageTerms")].join(" "),
 		);
-		const imageUrl = (typeof info.thumburl === "string" && info.thumburl) || (typeof info.url === "string" ? info.url : "");
+		const thumb = typeof info.thumburl === "string" ? info.thumburl : "";
+		// A drawing is only ever fetched as Commons' own rendered raster thumbnail.
+		if (thumbOnly && !/\.(?:png|jpe?g)(?:\?|$)/i.test(thumb)) continue;
+		const imageUrl = thumb || (typeof info.url === "string" ? info.url : "");
 		if (!imageUrl || !figureImageAllowed(source, imageUrl)) continue;
 		const description = metaText(meta, "ImageDescription") || metaText(meta, "ObjectName");
 		out.push({
@@ -127,7 +160,10 @@ export function parseCommonsResults(json: unknown): FigureCandidateDraft[] {
 			description: description ? clip(description, 300) : undefined,
 		});
 	}
-	return out;
+	// Stable: Commons' own relevance order is kept within each group.
+	const english = out.filter((c) => !isForeignLabelVariant(c.title));
+	const translated = out.filter((c) => isForeignLabelVariant(c.title));
+	return [...english, ...translated].slice(0, COMMONS_KEEP);
 }
 
 // ─── Europe PMC (open-access articles) ───────────────────────────────────────

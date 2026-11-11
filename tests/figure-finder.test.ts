@@ -250,6 +250,77 @@ describe("open sources", () => {
 	});
 });
 
+describe("fewer steps, honest partial matches", () => {
+	it("one look compares several candidates (a slide and a Commons picture) and either can then be shown", async () => {
+		const log: string[] = [];
+		const renders: Array<{ path: string; pages: number[]; dpi?: number }> = [];
+		const e = env({
+			cacheRoot: newRoot(),
+			library: { reader: fakeLibrary(), pdfPath: (id) => `/library/${id}/source.pdf` },
+			headless: fakeHeadless(renders),
+			fetchImpl: network({ [COMMONS_API]: COMMONS, [COMMONS_IMG]: COMMONS_IMAGE }, log),
+		});
+		const result = await run(
+			[
+				[["slides_search", { query: "pneumothorax" }]],
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { ids: ["c1", "c2"] }]],
+				[["show_image", { id: "c2", shows: "Apical pneumothorax on CT and chest X-ray.", key_feature: "the pleural line at the apex", confident: true }]],
+			],
+			e,
+		);
+		assert.equal(result.outcome, "image", "both were seen in the one look, so the second may be shown");
+		assert.equal(result.image?.tier, "commons");
+		assert.equal(renders.length, 1, "the slide was rendered in the same look");
+		assert.equal(log.filter((u) => u === COMMONS_IMG).length, 1);
+	});
+
+	it("a look over a page and a picture still shows the picture and says why the page cannot be seen", async () => {
+		const e = env({ cacheRoot: newRoot(), fetchImpl: network({ [COMMONS_API]: COMMONS, [COMMONS_IMG]: COMMONS_IMAGE }, []) });
+		const result = await run(
+			[
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { ids: ["c1", "c99"] }]],
+				[["show_image", { id: "c1", shows: "Apical pneumothorax.", key_feature: "the apex", confident: true }]],
+			],
+			e,
+		);
+		assert.equal(result.outcome, "image");
+	});
+
+	it("shows the best picture with what it lacks, instead of a link, when it covers the core of the concept", async () => {
+		// Live case (2026-11-12): the finder looked at a CC-licensed OpenStax peritoneum drawing and the
+		// learner's own First Aid page, judged each a partial match, and gave only a link.
+		const e = env({ cacheRoot: newRoot(), fetchImpl: network({ [COMMONS_API]: COMMONS, [COMMONS_IMG]: COMMONS_IMAGE }, []) });
+		const result = await run(
+			[
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { id: "c1" }]],
+				[["show_image", { id: "c1", shows: "Apical pneumothorax on CT and chest X-ray.", key_feature: "the pleural line at the apex", not_shown: "the mediastinal shift asked for", confident: true }]],
+			],
+			e,
+		);
+		assert.equal(result.outcome, "image");
+		assert.equal(result.notShown, "the mediastinal shift asked for");
+		assert.match(result.brief, /It does not show: the mediastinal shift asked for/);
+		assert.match(result.brief, /never claim the picture shows it/);
+	});
+
+	it("a blank not_shown is dropped", async () => {
+		const e = env({ cacheRoot: newRoot(), fetchImpl: network({ [COMMONS_API]: COMMONS, [COMMONS_IMG]: COMMONS_IMAGE }, []) });
+		const result = await run(
+			[
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { id: "c1" }]],
+				[["show_image", { id: "c1", shows: "Apical pneumothorax.", key_feature: "the apex", not_shown: "  ", confident: true }]],
+			],
+			e,
+		);
+		assert.equal(result.notShown, undefined);
+		assert.doesNotMatch(result.brief, /does not show/);
+	});
+});
+
 describe("links: journals, blocked sites, and ids", () => {
 	const provider = (hits: Array<{ title: string; url: string; snippet: string }>, seen: string[] = []): (() => SearchProvider) => () => ({
 		id: "tavily",

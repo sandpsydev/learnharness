@@ -279,6 +279,13 @@ describe("the figure card", () => {
 		assert.match(html, /break-words/, "long credit lines wrap instead of overflowing");
 	});
 
+	it("a partial match says plainly what the picture does not show", () => {
+		const html = renderToStaticMarkup(inChat(<FigureOutputCard output={{ ...imageResult(), notShown: "the mediastinal shift" }} />));
+		assert.match(html, /data-testid="figure-not-shown"/);
+		assert.match(html, /Not in this picture: <\/span>the mediastinal shift/);
+		assert.ok(!renderToStaticMarkup(inChat(<FigureOutputCard output={imageResult()} />)).includes("Not in this picture"), "absent when it shows everything");
+	});
+
 	it("a lecture slide shows the lecture name and no outside link", () => {
 		const slide = imageResult({
 			image: image({ tier: "slides", source: "Your lecture slides", sourceUrl: undefined, title: "Acute chest pain, slide 7", credit: "From your library: Acute chest pain", licence: "Your own lecture material", licenceUrl: undefined }),

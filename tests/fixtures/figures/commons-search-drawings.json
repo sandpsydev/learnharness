@@ -1,0 +1,159 @@
+{
+ "batchcomplete": "",
+ "query": {
+  "pages": {
+   "1": {
+    "pageid": 1,
+    "ns": 6,
+    "title": "File:Nephron pl.svg",
+    "index": 1,
+    "imageinfo": [
+     {
+      "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a1/Nephron_pl.svg/1000px-Nephron_pl.svg.png",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/x/1",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Nephron_pl.svg",
+      "mime": "image/svg+xml",
+      "extmetadata": {
+       "LicenseShortName": {
+        "value": "CC BY 3.0"
+       }
+      }
+     }
+    ]
+   },
+   "2": {
+    "pageid": 2,
+    "ns": 6,
+    "title": "File:Brachial plexus color (vi).svg",
+    "index": 2,
+    "imageinfo": [
+     {
+      "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b1/Bp_vi.svg/1000px-Bp_vi.svg.png",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/x/2",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Brachial_plexus_color_(vi).svg",
+      "mime": "image/svg+xml",
+      "extmetadata": {
+       "LicenseShortName": {
+        "value": "CC BY-SA 3.0"
+       }
+      }
+     }
+    ]
+   },
+   "3": {
+    "pageid": 3,
+    "ns": 6,
+    "title": "File:Colonic blood supply.svg",
+    "index": 3,
+    "imageinfo": [
+     {
+      "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Colonic_blood_supply.svg/1000px-Colonic_blood_supply.svg.png",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/x/3",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Colonic_blood_supply.svg",
+      "mime": "image/svg+xml",
+      "extmetadata": {
+       "LicenseShortName": {
+        "value": "CC BY 3.0"
+       }
+      }
+     }
+    ]
+   },
+   "4": {
+    "pageid": 4,
+    "ns": 6,
+    "title": "File:Hernia atlas (1898).pdf",
+    "index": 4,
+    "imageinfo": [
+     {
+      "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d1/Hernia.pdf/page1-1000px-Hernia.pdf.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/x/4",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Hernia_atlas_(1898).pdf",
+      "mime": "application/pdf",
+      "extmetadata": {
+       "LicenseShortName": {
+        "value": "Public domain"
+       }
+      }
+     }
+    ]
+   },
+   "5": {
+    "pageid": 5,
+    "ns": 6,
+    "title": "File:Chest X-ray PA.jpg",
+    "index": 5,
+    "imageinfo": [
+     {
+      "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/Cxr_pa.jpg/1000px-Cxr_pa.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/x/5",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Chest_X-ray_PA.jpg",
+      "mime": "image/jpeg",
+      "extmetadata": {
+       "LicenseShortName": {
+        "value": "CC0"
+       }
+      }
+     }
+    ]
+   },
+   "6": {
+    "pageid": 6,
+    "ns": 6,
+    "title": "File:Nefron-EN.svg",
+    "index": 6,
+    "imageinfo": [
+     {
+      "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f1/Nefron-EN.svg/1000px-Nefron-EN.svg.png",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/x/6",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Nefron-EN.svg",
+      "mime": "image/svg+xml",
+      "extmetadata": {
+       "LicenseShortName": {
+        "value": "CC BY 3.0"
+       }
+      }
+     }
+    ]
+   },
+   "7": {
+    "pageid": 7,
+    "ns": 6,
+    "title": "File:Kidney nephron molar transport diagram.ja.svg",
+    "index": 7,
+    "imageinfo": [
+     {
+      "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/g/g1/Kn.ja.svg/1000px-Kn.ja.svg.png",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/x/7",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Kidney_nephron_molar_transport_diagram.ja.svg",
+      "mime": "image/svg+xml",
+      "extmetadata": {
+       "LicenseShortName": {
+        "value": "CC BY-SA 3.0"
+       }
+      }
+     }
+    ]
+   },
+   "8": {
+    "pageid": 8,
+    "ns": 6,
+    "title": "File:Odd drawing.svg",
+    "index": 8,
+    "imageinfo": [
+     {
+      "thumburl": "https://upload.wikimedia.org/wikipedia/commons/h/h1/Odd_drawing.svg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/x/8",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Odd_drawing.svg",
+      "mime": "image/svg+xml",
+      "extmetadata": {
+       "LicenseShortName": {
+        "value": "CC0"
+       }
+      }
+     }
+    ]
+   }
+  }
+ }
+}

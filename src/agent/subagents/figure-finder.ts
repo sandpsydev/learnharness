@@ -69,6 +69,7 @@ export interface FigureFinderOptions {
 
 /** Page-image resolution for a lecture slide: sharp enough to read, light enough to keep. */
 export const SLIDE_DPI = 110;
+const LECTURE_SLIDES = "Your lecture slides";
 
 const INSTRUCTIONS = `You are a figure finder for a medical teaching app. The tutor asks for ONE real picture that shows a concept — anatomy, imaging, histology, a clinical photograph, an ECG. You find it, LOOK at it, and report. You never draw, sketch or describe-in-place-of-showing.
 
@@ -257,7 +258,7 @@ function createFigureTools(
 							kind: "slide",
 							sourceId: "library",
 							tier: "slides",
-							sourceName: h.book.kind === "slidescribe" ? "Your lecture slides" : "Your library",
+							sourceName: h.book.kind === "slidescribe" ? LECTURE_SLIDES : "Your library",
 							title: citationFor(h.book, h.chunk.page),
 							description: oneLine(h.chunk.text, 280),
 							slide: { bookId: h.book.id, bookTitle: h.book.title, page: h.chunk.page },
@@ -413,7 +414,9 @@ function createFigureTools(
 					...(c.pageUrl ? { sourceUrl: c.pageUrl } : {}),
 					title: c.title,
 					credit: c.kind === "slide" ? `From your library: ${c.slide?.bookTitle ?? c.title}` : candidateCredit(c),
-					licence: c.kind === "slide" ? "Your own lecture material" : c.licence!.label,
+					// A page of a textbook in the library is the learner's copy of someone else's book,
+					// not their lecture material: only slide decks are labelled as their own.
+					licence: c.kind === "slide" ? (c.sourceName === LECTURE_SLIDES ? "Your own lecture material" : "Your library copy (personal study)") : c.licence!.label,
 					...(c.licence?.url ? { licenceUrl: c.licence.url } : {}),
 				};
 				decide({ result: imageResult(input, image, shows, keyFeature, notShown) });

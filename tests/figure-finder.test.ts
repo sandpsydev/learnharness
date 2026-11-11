@@ -137,6 +137,32 @@ describe("the learner's own slides come first", () => {
 	});
 });
 
+describe("a textbook page from the library", () => {
+	it("is credited as the learner's library copy, never as their own lecture material", async () => {
+		// Live case (2026-11-12): a Schwartz textbook page was labelled "Your own lecture material".
+		const book = { id: "book_2", kind: "pdf", title: "Schwartz's Principles of Surgery", fileName: "s.pdf", pageCount: 2000 } as unknown as LibraryBook;
+		const reader = {
+			hasBooks: () => true,
+			async search() {
+				return { hits: [{ book, chunk: { index: 0, page: 1288, section: "Colon", text: "Figure 29-1. Arterial blood supply to the colon." }, score: 1, via: ["keyword" as const] }], notes: [] };
+			},
+			read: () => ({ ok: false, error: "unused" }),
+		} as unknown as LibraryReader;
+		const e = env({ cacheRoot: newRoot(), library: { reader, pdfPath: (id) => `/library/${id}/source.pdf` }, headless: fakeHeadless([]) });
+		const result = await run(
+			[
+				[["slides_search", { query: "colon arterial supply" }]],
+				[["look", { id: "c1" }]],
+				[["show_image", { id: "c1", shows: "Schwartz Figure 29-1.", key_feature: "the marginal artery", confident: true }]],
+			],
+			e,
+		);
+		assert.equal(result.image?.source, "Your library");
+		assert.equal(result.image?.licence, "Your library copy (personal study)");
+		assert.doesNotMatch(result.brief, /lecture material/);
+	});
+});
+
 describe("open sources", () => {
 	it("shows a Commons picture with its credit, licence and source link, and fetches it once per session", async () => {
 		const cacheRoot = newRoot();

@@ -87,6 +87,28 @@ export function serverEnv(baseEnv, { port, dataDir, authFile }) {
 	};
 }
 
+/**
+ * Remove the copies of the repo's own data/ folder and dev secrets (a `npm run dev`
+ * sign-in saves chatgpt-credentials.json at the repo root) that the build's file
+ * trace sweeps into .next/standalone. The instrumentation trace takes the whole
+ * repo root and next.config's outputFileTracingExcludes never applies to it, so
+ * without this a single dev sign-in made every later `npm run pocket` build stop
+ * at build-server.mjs's secrets guard. Only the copies under `standaloneDir` are
+ * touched — never the repo's real data/ or sign-in files. Pocket mode reads its
+ * keys from the desktop app's folder (LH_AUTH_FILE), never from the bundle.
+ */
+export function dropRepoCopies(standaloneDir) {
+	const removed = [];
+	if (!fs.existsSync(standaloneDir)) return removed;
+	const secret = /^(?:auth\.json|\.env(?:\..*)?|(?:chatgpt|github-copilot|xai)-credentials\.json.*)$/;
+	for (const name of fs.readdirSync(standaloneDir)) {
+		if (name !== "data" && !secret.test(name)) continue;
+		fs.rmSync(path.join(standaloneDir, name), { recursive: true, force: true });
+		removed.push(name);
+	}
+	return removed.sort();
+}
+
 export const serveTarget = (port) => `http://${BIND_HOST}:${port}`;
 
 /**
@@ -294,10 +316,9 @@ export function realDeps() {
 		},
 		buildServer: async () => {
 			await runInherit(process.execPath, [path.join(ROOT, "node_modules", "next", "dist", "bin", "next"), "build"]);
-			// The build can drop a copy of the repo's own data/ folder into the output;
-			// build-server.mjs refuses to continue while it's there. Drop the copy
-			// (it lives under .next/standalone — the repo's data/ is not touched).
-			fs.rmSync(path.join(ROOT, ".next", "standalone", "data"), { recursive: true, force: true });
+			// The build can drop copies of the repo's own data/ folder and dev sign-ins
+			// into the output; build-server.mjs refuses to continue while they're there.
+			dropRepoCopies(path.join(ROOT, ".next", "standalone"));
 			await runInherit(process.execPath, [path.join(ROOT, "scripts", "build-server.mjs")]);
 		},
 		log: (line) => console.log(line),

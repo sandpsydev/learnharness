@@ -1512,9 +1512,27 @@ describe("prompt composition", () => {
 		// chars; 8k is generous headroom. Composed total ≤ 70k chars (raised from 60k
 		// for the first-pass, check-set and medical-figure rules, then to 70k for the
 		// real-figure `figure` tool rules, 2026-11).
-		for (const f of fs.readdirSync("src/agent/prompts").filter((f) => /^\d+-[\w.-]+\.md$/.test(f))) {
+		//
+		// QA 2026-11-12: this loop used to read src/agent/prompts at the top level
+		// only, where nothing but README.md lives — every fragment is in a role
+		// subfolder, so the per-fragment check never ran, and two fragments had
+		// already grown past 8k. It now walks every subfolder, proves it found the
+		// fragments, and holds the two large ones at named limits just above their
+		// size on that date (practice/10-doctrine.md 17,307; teacher/60-medical-edge.md
+		// 11,656) until they are split or the owner raises them.
+		const OVER_8K: Record<string, number> = {
+			"practice/10-doctrine.md": 18_000,
+			"teacher/60-medical-edge.md": 12_500,
+		};
+		const fragments = (fs.readdirSync("src/agent/prompts", { recursive: true }) as string[])
+			.map((f) => f.split(path.sep).join("/"))
+			.filter((f) => /(^|\/)\d+-[\w.-]+\.md$/.test(f));
+		assert.ok(fragments.length >= 30, `found only ${fragments.length} prompt fragments — the guard is not reading the role subfolders`);
+		for (const name of Object.keys(OVER_8K)) assert.ok(fragments.includes(name), `named limit for a missing fragment: ${name}`);
+		for (const f of fragments) {
 			const body = fs.readFileSync(`src/agent/prompts/${f}`, "utf-8").trim();
-			assert.ok(body.length <= 8_000, `fragment ${f} is ${body.length} chars — over the 8k guard`);
+			const limit = OVER_8K[f] ?? 8_000;
+			assert.ok(body.length <= limit, `fragment ${f} is ${body.length} chars — over its ${limit} guard`);
 		}
 		assert.ok(composeInstructions("teacher").length <= 70_000, "composed system prompt over the 70k guard");
 	});

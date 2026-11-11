@@ -163,6 +163,71 @@ describe("a textbook page from the library", () => {
 	});
 });
 
+describe("cropping a library page to its figure", () => {
+	/** A 100×400 PNG page (Photon builds it from raw RGBA). */
+	async function tallPage(): Promise<Buffer> {
+		const photon = await import("@silvia-odwyer/photon-node");
+		const img = new photon.PhotonImage(new Uint8Array(100 * 400 * 4).fill(200), 100, 400);
+		try {
+			return Buffer.from(img.get_bytes());
+		} finally {
+			img.free();
+		}
+	}
+	async function dims(bytes: Uint8Array): Promise<[number, number]> {
+		const photon = await import("@silvia-odwyer/photon-node");
+		const img = photon.PhotonImage.new_from_byteslice(bytes);
+		try {
+			return [img.get_width(), img.get_height()];
+		} finally {
+			img.free();
+		}
+	}
+	function pageEnv(cacheRoot: string, page: Buffer, fetchImpl?: typeof fetch): FigureFinderEnv {
+		const headless = () =>
+			({ available: () => true, renderPdfPages: async (_p: string, pages: number[]) => pages.map((n) => ({ page: n, png: page })) }) as unknown as HeadlessApi;
+		return env({ cacheRoot, library: { reader: fakeLibrary(), pdfPath: (id) => `/library/${id}/source.pdf` }, headless, fetchImpl });
+	}
+	const show = (crop: unknown): Array<[string, unknown]>[] => [
+		[["slides_search", { query: "pneumothorax" }]],
+		[["look", { id: "c1" }]],
+		[["show_image", { id: "c1", shows: "Figure 3-2.", key_feature: "the pleural line", confident: true, crop }]],
+	];
+
+	it("shows only the band holding the figure, with a safety margin, cached beside the page", async () => {
+		const cacheRoot = newRoot();
+		const result = await run(show({ top: 0.1, bottom: 0.4 }), pageEnv(cacheRoot, await tallPage()));
+		assert.equal(result.outcome, "image");
+		const shown = readCachedFigure(cacheRoot, CHAT, result.image!.file)!;
+		const [w, h] = await dims(shown.bytes);
+		assert.equal(w, 100, "full width");
+		// 0.07..0.43 of 400 px (the 0.03 margin on each side).
+		assert.ok(h >= 140 && h <= 148, `band height ${h}`);
+	});
+
+	it("shows the whole page when the band is too thin or covers everything", async () => {
+		for (const crop of [{ top: 0.5, bottom: 0.52 }, { top: 0, bottom: 1 }]) {
+			const cacheRoot = newRoot();
+			const result = await run(show(crop), pageEnv(cacheRoot, await tallPage()));
+			const [, h] = await dims(readCachedFigure(cacheRoot, CHAT, result.image!.file)!.bytes);
+			assert.equal(h, 400, JSON.stringify(crop));
+		}
+	});
+
+	it("never crops an outside picture (its licence may forbid changes)", async () => {
+		const cacheRoot = newRoot();
+		const result = await run(
+			[
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { id: "c1" }]],
+				[["show_image", { id: "c1", shows: "Apical pneumothorax.", key_feature: "the apex", confident: true, crop: { top: 0.1, bottom: 0.4 } }]],
+			],
+			env({ cacheRoot, fetchImpl: network({ [COMMONS_API]: COMMONS, [COMMONS_IMG]: COMMONS_IMAGE }, []) }),
+		);
+		assert.deepEqual(readCachedFigure(cacheRoot, CHAT, result.image!.file)!.bytes, Uint8Array.from(PNG));
+	});
+});
+
 describe("open sources", () => {
 	it("shows a Commons picture with its credit, licence and source link, and fetches it once per session", async () => {
 		const cacheRoot = newRoot();

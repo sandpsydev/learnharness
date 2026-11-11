@@ -16,7 +16,8 @@ import {
 } from "../../core/figures.ts";
 import { citationFor } from "../../core/library.ts";
 import { fetchFigureImage } from "../figures/fetch.ts";
-import { findCachedFigure, figureKey, writeCachedFigure } from "../figures/cache.ts";
+import { findCachedFigure, figureKey, readCachedFigure, writeCachedFigure } from "../figures/cache.ts";
+import { cropVerticalBand } from "../image-processing/crop.ts";
 import {
 	candidateCredit,
 	fetchEuropePmcFigures,
@@ -70,6 +71,10 @@ export interface FigureFinderOptions {
 /** Page-image resolution for a lecture slide: sharp enough to read, light enough to keep. */
 export const SLIDE_DPI = 110;
 const LECTURE_SLIDES = "Your lecture slides";
+/** Added above and below the finder's band: its estimate must never clip the figure or its caption. */
+export const CROP_MARGIN = 0.03;
+/** A band thinner than this is not worth cropping to (the whole page is shown instead). */
+const CROP_MIN_SPAN = 0.12;
 
 const INSTRUCTIONS = `You are a figure finder for a medical teaching app. The tutor asks for ONE real picture that shows a concept — anatomy, imaging, histology, a clinical photograph, an ECG. You find it, LOOK at it, and report. You never draw, sketch or describe-in-place-of-showing.
 
@@ -85,6 +90,7 @@ Rules:
 - look before you show an image: the picture itself must show the concept. A matching title is not enough. Check the thing the tutor named (the side, the sign, the stain, the view).
 - show_image only when you are confident the picture shows the core of the concept. If you are not sure it does, call give_links with the page instead — a link is better than a wrong picture.
 - The tutor's request may list several details (labels, neighbouring structures). A real picture that clearly shows the core of the concept is worth showing even when it lacks some of them: show the best one you looked at and name what it lacks in not_shown. A picture beats a link; the learner's own slide beats an outside picture of the same thing. Do not keep searching for a perfect match.
+- A page of the learner's books often holds one figure among columns of text. Then give crop (top and bottom of the figure with its caption, as fractions of the page height) so the learner sees the figure, not the page. Be generous rather than tight.
 - The caption (shows) says what the picture is in one or two plain sentences. key_feature names the ONE thing to find in it ("the thin white visceral pleural line with no lung markings beyond it"), written so the tutor can point at it. Say only what you can actually see; if a label or the source's description gives the diagnosis, say that it comes from the source.
 - If look says the image cannot be shown (no reusable licence, or the site blocks downloads), the page is still a good link: use give_links, with a one-line note of what to look at on that page.
 - give_links takes at most three pages, best first, each with a note of one line: what to look at.
@@ -164,6 +170,15 @@ const showInput = Type.Object({
 	id: Type.String({ minLength: 1, description: "The id of the candidate you looked at." }),
 	shows: Type.String({ minLength: 1, description: "Caption: what the picture shows, one or two plain sentences." }),
 	key_feature: Type.String({ minLength: 1, description: "The one feature to find in it, written so the tutor can point at it." }),
+	crop: Type.Optional(
+		Type.Object(
+			{
+				top: Type.Number({ minimum: 0, maximum: 1, description: "Top of the figure (with its caption), as a fraction of the page height: 0 is the top edge." }),
+				bottom: Type.Number({ minimum: 0, maximum: 1, description: "Bottom of the figure (with its caption), as a fraction of the page height: 1 is the bottom edge." }),
+			},
+			{ description: "Only for a page of the learner's slides or books where the figure fills part of the page: the band to show, so the learner sees the figure and its caption instead of the whole page of text. Leave out for a slide that is all figure, and for outside pictures (they are never cropped)." },
+		),
+	),
 	not_shown: Type.Optional(Type.String({ description: "Details the tutor asked for that this picture does NOT show (a missing label, a structure out of view). Leave out when it shows everything." })),
 	confident: Type.Boolean({ description: "true only if you looked at it and it shows the core of the concept. false turns it into a link." }),
 });
@@ -385,7 +400,7 @@ function createFigureTools(
 			label: "show_image",
 			description: "FINISH: show the picture you looked at in the lesson, with your caption and the key feature. Only when you are confident it matches.",
 			parameters: showInput,
-			execute: serverExecute("show_image", showInput, (args): string => {
+			execute: serverExecute("show_image", showInput, async (args): Promise<string> => {
 				const c = registry.get(args.id);
 				if (!c) return `No candidate ${args.id}.`;
 				const viewed = registry.viewed.get(c.id);
@@ -406,9 +421,15 @@ function createFigureTools(
 				if (c.kind !== "slide" && (!source || source.embed === "never" || !c.licence)) {
 					return shownAsLink("no reusable licence was read for this picture");
 				}
+				// A library page: show only the band holding the figure, when the finder gave one.
+				let shown: Viewed = viewed;
+				if (c.kind === "slide" && c.slide && args.crop) {
+					const band = await figureBand(env, c.slide, viewed, args.crop);
+					if (band) shown = band;
+				}
 				const image: FigureImage = {
-					file: viewed.file,
-					mime: viewed.mime,
+					file: shown.file,
+					mime: shown.mime,
 					tier: c.tier as FigureImage["tier"],
 					source: c.sourceName,
 					...(c.pageUrl ? { sourceUrl: c.pageUrl } : {}),
@@ -452,6 +473,27 @@ function createFigureTools(
 			}),
 		},
 	};
+}
+
+/** The cropped band of a rendered library page, cached beside the page. Null = show the whole page. */
+async function figureBand(
+	env: FigureFinderEnv,
+	slide: { bookId: string; page: number },
+	page: Viewed,
+	crop: { top: number; bottom: number },
+): Promise<Viewed | null> {
+	const top = Math.max(0, Math.min(crop.top, crop.bottom) - CROP_MARGIN);
+	const bottom = Math.min(1, Math.max(crop.top, crop.bottom) + CROP_MARGIN);
+	if (bottom - top < CROP_MIN_SPAN || (top === 0 && bottom === 1)) return null;
+	const key = figureKey("slide-band", slide.bookId, slide.page, SLIDE_DPI, top.toFixed(3), bottom.toFixed(3));
+	const cached = findCachedFigure(env.cacheRoot, env.chatId, key);
+	if (cached) return { file: cached.file, mime: cached.mime };
+	const whole = readCachedFigure(env.cacheRoot, env.chatId, page.file);
+	if (!whole) return null;
+	const band = await cropVerticalBand(whole.bytes, top, bottom);
+	if (!band) return null;
+	const written = writeCachedFigure(env.cacheRoot, env.chatId, key, "image/png", band);
+	return { file: written.file, mime: written.mime };
 }
 
 // ─── results (the wording the tutor reads is set here, not by the model) ──────

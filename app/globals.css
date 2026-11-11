@@ -359,6 +359,14 @@ body {
 	   max-width cap: a max-width would squish-wrap wide tables instead of
 	   letting the md-blocks overflow-x scroller carry them. */
 	width: max-content;
+	/* ...but never wider than the column when the cells CAN wrap (QA, 2026-11-12:
+	   with max-content alone, a cell holding one sentence of prose became a single
+	   line — a two-column coverage table measured 1894px in a 358px phone column,
+	   and the learner swiped sideways through every row). The squish the hug rule
+	   guards against is prevented by the cells' readable minimum below: a table
+	   whose columns cannot all fit at that minimum still overflows into the
+	   md-blocks scroller instead of squeezing. Short tables still hug. */
+	max-width: 100%;
 	/* Tables run at the SESSION prose size (owner note, 2026-09-19: they
 	   visibly lagged the 16px chat text at streamdown's 12.5px text-sm).
 	   Unlayered CSS beats the cells' own utility-layer text-sm, and the
@@ -367,6 +375,13 @@ body {
 }
 [data-streamdown="table"] :where(th, td) {
 	font-size: inherit;
+	/* A readable column floor: below it a wide table scrolls, it never squeezes. */
+	min-width: 8.5rem;
+}
+/* Headers wrap like cells (streamdown pins them nowrap, which let one long
+   header set a column's width on a phone). */
+[data-streamdown="table"] th {
+	white-space: normal;
 }
 /* Column separators: a hairline left rule on every cell but the first in
    its row (owner ask, 2026-09-19) — border-collapse merges it with the row

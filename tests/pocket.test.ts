@@ -15,6 +15,7 @@ import {
 	DEFAULT_POCKET_PORT,
 	PocketError,
 	desktopUserDataDir,
+	dropRepoCopies,
 	inspectServeConfig,
 	parseArgs,
 	phoneLink,
@@ -245,5 +246,22 @@ describe("pocket lock", () => {
 	it("the desktop shell checks the lock before starting its server", () => {
 		const main = fs.readFileSync(path.join(import.meta.dirname, "..", "electron", "main.cjs"), "utf8");
 		assert.ok(main.indexOf("pocketRunning(DATA_DIR())") > 0 && main.indexOf("pocketRunning(DATA_DIR())") < main.indexOf("starting server:"));
+	});
+});
+
+describe("dropRepoCopies (the build's trace sweep)", () => {
+	it("removes the swept-in data/ folder and dev sign-ins, and nothing else", () => {
+		const standalone = path.join(tmp, "repo", ".next", "standalone");
+		fs.mkdirSync(path.join(standalone, "data", "chats"), { recursive: true });
+		for (const name of ["chatgpt-credentials.json", "chatgpt-credentials.json.tmp-1", "xai-credentials.json", "auth.json", ".env.local", "package.json"]) {
+			fs.writeFileSync(path.join(standalone, name), "{}");
+		}
+		fs.mkdirSync(path.join(standalone, "node_modules"), { recursive: true });
+		assert.deepEqual(dropRepoCopies(standalone), [".env.local", "auth.json", "chatgpt-credentials.json", "chatgpt-credentials.json.tmp-1", "data", "xai-credentials.json"]);
+		assert.deepEqual(fs.readdirSync(standalone).sort(), ["node_modules", "package.json", "server.js"]);
+	});
+
+	it("is a no-op when there is no build output", () => {
+		assert.deepEqual(dropRepoCopies(path.join(tmp, "nowhere")), []);
 	});
 });

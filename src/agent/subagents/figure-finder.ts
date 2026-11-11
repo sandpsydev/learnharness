@@ -16,7 +16,8 @@ import {
 } from "../../core/figures.ts";
 import { citationFor } from "../../core/library.ts";
 import { fetchFigureImage } from "../figures/fetch.ts";
-import { findCachedFigure, figureKey, writeCachedFigure } from "../figures/cache.ts";
+import { findCachedFigure, figureKey, readCachedFigure, writeCachedFigure } from "../figures/cache.ts";
+import { cropVerticalBand } from "../image-processing/crop.ts";
 import {
 	candidateCredit,
 	fetchEuropePmcFigures,
@@ -69,6 +70,11 @@ export interface FigureFinderOptions {
 
 /** Page-image resolution for a lecture slide: sharp enough to read, light enough to keep. */
 export const SLIDE_DPI = 110;
+const LECTURE_SLIDES = "Your lecture slides";
+/** Added above and below the finder's band: its estimate must never clip the figure or its caption. */
+export const CROP_MARGIN = 0.03;
+/** A band thinner than this is not worth cropping to (the whole page is shown instead). */
+const CROP_MIN_SPAN = 0.12;
 
 const INSTRUCTIONS = `You are a figure finder for a medical teaching app. The tutor asks for ONE real picture that shows a concept — anatomy, imaging, histology, a clinical photograph, an ECG. You find it, LOOK at it, and report. You never draw, sketch or describe-in-place-of-showing.
 
@@ -80,8 +86,11 @@ Look in this order and stop when a picture is good:
 
 Rules:
 - You may only use ids that a tool gave you. Never write a URL yourself.
-- look(id) before you show an image: the picture itself must show the concept. A matching title is not enough. Check the thing the tutor named (the side, the sign, the stain, the view).
-- show_image only when you are confident the picture matches. If you are not sure, call give_links with the page instead — a link is better than a wrong picture.
+- Save steps: call independent searches together in one turn (for example slides_search and commons_search at once), and look at up to four candidates in one look call to compare them side by side.
+- look before you show an image: the picture itself must show the concept. A matching title is not enough. Check the thing the tutor named (the side, the sign, the stain, the view).
+- show_image only when you are confident the picture shows the core of the concept. If you are not sure it does, call give_links with the page instead — a link is better than a wrong picture.
+- The tutor's request may list several details (labels, neighbouring structures). A real picture that clearly shows the core of the concept is worth showing even when it lacks some of them: show the best one you looked at and name what it lacks in not_shown. A picture beats a link; the learner's own slide beats an outside picture of the same thing. Do not keep searching for a perfect match.
+- A page of the learner's books often holds one figure among columns of text. Then give crop (top and bottom of the figure with its caption, as fractions of the page height) so the learner sees the figure, not the page. Be generous rather than tight.
 - The caption (shows) says what the picture is in one or two plain sentences. key_feature names the ONE thing to find in it ("the thin white visceral pleural line with no lung markings beyond it"), written so the tutor can point at it. Say only what you can actually see; if a label or the source's description gives the diagnosis, say that it comes from the source.
 - If look says the image cannot be shown (no reusable licence, or the site blocks downloads), the page is still a good link: use give_links, with a one-line note of what to look at on that page.
 - give_links takes at most three pages, best first, each with a note of one line: what to look at.
@@ -151,13 +160,27 @@ const siteInput = Type.Object({
 	source: Type.Union(SITE_SOURCES.map((id) => Type.Literal(id)), { description: `Which site: ${SITE_SOURCES.join(", ")}.` }),
 	query: Type.String({ minLength: 1, description: "A short search." }),
 });
-const idInput = Type.Object({ id: Type.String({ minLength: 1, description: "A candidate id a tool gave you, such as c3." }) });
+const LOOK_MAX = 4;
+const lookInput = Type.Object({
+	id: Type.Optional(Type.String({ minLength: 1, description: "A candidate id a tool gave you, such as c3." })),
+	ids: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: LOOK_MAX, description: `Up to ${LOOK_MAX} candidate ids to compare in one look.` })),
+});
 const pageInput = Type.Object({ id: Type.String({ minLength: 1, description: "The id of a page candidate (an atlas or case page)." }) });
 const showInput = Type.Object({
 	id: Type.String({ minLength: 1, description: "The id of the candidate you looked at." }),
 	shows: Type.String({ minLength: 1, description: "Caption: what the picture shows, one or two plain sentences." }),
 	key_feature: Type.String({ minLength: 1, description: "The one feature to find in it, written so the tutor can point at it." }),
-	confident: Type.Boolean({ description: "true only if you looked at it and it shows the concept. false turns it into a link." }),
+	crop: Type.Optional(
+		Type.Object(
+			{
+				top: Type.Number({ minimum: 0, maximum: 1, description: "Top of the figure (with its caption), as a fraction of the page height: 0 is the top edge." }),
+				bottom: Type.Number({ minimum: 0, maximum: 1, description: "Bottom of the figure (with its caption), as a fraction of the page height: 1 is the bottom edge." }),
+			},
+			{ description: "Only for a page of the learner's slides or books where the figure fills part of the page: the band to show, so the learner sees the figure and its caption instead of the whole page of text. Leave out for a slide that is all figure, and for outside pictures (they are never cropped)." },
+		),
+	),
+	not_shown: Type.Optional(Type.String({ description: "Details the tutor asked for that this picture does NOT show (a missing label, a structure out of view). Leave out when it shows everything." })),
+	confident: Type.Boolean({ description: "true only if you looked at it and it shows the core of the concept. false turns it into a link." }),
 });
 const linksInput = Type.Object({
 	links: Type.Array(Type.Object({ id: Type.String({ minLength: 1 }), note: Type.String({ minLength: 1, description: "One line: what to look at on that page." }) }), { minItems: 1, maxItems: 3 }),
@@ -195,6 +218,44 @@ function createFigureTools(
 		return { text: facts.join("\n"), ...(processed.ok ? { images: [{ data: processed.data, mimeType: processed.mimeType }] } : {}) };
 	}
 
+	/** Fetch (or render) one candidate and show it; a string says why it cannot be seen. */
+	async function lookOne(id: string): Promise<string | ImageFileResult> {
+		const c = registry.get(id);
+		if (!c) return `No candidate ${id}.`;
+		if (c.kind === "page") return `${id} is a page, not a picture. Use page_images (or europepmc_figures) to list its pictures.`;
+		if (c.kind === "slide" && c.slide) {
+			const key = figureKey("slide", c.slide.bookId, c.slide.page, SLIDE_DPI);
+			let cached = findCachedFigure(env.cacheRoot, env.chatId, key);
+			if (!cached) {
+				if (!env.library) return "The library is not available.";
+				try {
+					const [rendered] = await env.headless().renderPdfPages(env.library.pdfPath(c.slide.bookId), [c.slide.page], { dpi: SLIDE_DPI });
+					if (!rendered) return `Slide ${c.slide.page} could not be rendered.`;
+					cached = writeCachedFigure(env.cacheRoot, env.chatId, key, "image/png", rendered.png);
+				} catch (err) {
+					return `The slide could not be rendered: ${err instanceof Error ? err.message : String(err)}`;
+				}
+			}
+			return showToModel(c, { file: cached.file, mime: cached.mime }, cached.bytes);
+		}
+		if (!c.imageUrl) return `${id} has no picture to look at.`;
+		const source = figureSourceById(c.sourceId);
+		if (!source) return `${id} is not from an allowed source.`;
+		if (!figureImageAllowed(source, c.imageUrl)) return `${id}: ${source.name} does not allow this picture to be fetched. Give its page as a link.`;
+		const key = figureKey("image", c.imageUrl);
+		let cached = findCachedFigure(env.cacheRoot, env.chatId, key);
+		if (!cached) {
+			const fetched = await fetchFigureImage(c.imageUrl, {
+				allow: (u) => figureImageAllowed(source, u.toString()),
+				fetchImpl: env.fetchImpl,
+				signal: signalOf(),
+			});
+			if (!fetched.ok) return failureText(`Fetching ${id}`, fetched) + (c.pageUrl ? ` Its page (${id}) can still be given as a link.` : "");
+			cached = writeCachedFigure(env.cacheRoot, env.chatId, key, fetched.mime, fetched.bytes);
+		}
+		return showToModel(c, { file: cached.file, mime: cached.mime }, cached.bytes);
+	}
+
 	return {
 		slides_search: {
 			name: "slides_search",
@@ -212,7 +273,7 @@ function createFigureTools(
 							kind: "slide",
 							sourceId: "library",
 							tier: "slides",
-							sourceName: h.book.kind === "slidescribe" ? "Your lecture slides" : "Your library",
+							sourceName: h.book.kind === "slidescribe" ? LECTURE_SLIDES : "Your library",
 							title: citationFor(h.book, h.chunk.page),
 							description: oneLine(h.chunk.text, 280),
 							slide: { bookId: h.book.id, bookTitle: h.book.title, page: h.chunk.page },
@@ -315,43 +376,22 @@ function createFigureTools(
 		look: {
 			name: "look",
 			label: "look",
-			description: "Fetch one candidate picture (a slide or an image) and show it to you. You must look before show_image.",
-			parameters: idInput,
-			execute: serverExecute("look", idInput, async ({ id }): Promise<string | ImageFileResult> => {
-				const c = registry.get(id);
-				if (!c) return `No candidate ${id}.`;
-				if (c.kind === "page") return `${id} is a page, not a picture. Use page_images (or europepmc_figures) to list its pictures.`;
-				if (c.kind === "slide" && c.slide) {
-					const key = figureKey("slide", c.slide.bookId, c.slide.page, SLIDE_DPI);
-					let cached = findCachedFigure(env.cacheRoot, env.chatId, key);
-					if (!cached) {
-						if (!env.library) return "The library is not available.";
-						try {
-							const [rendered] = await env.headless().renderPdfPages(env.library.pdfPath(c.slide.bookId), [c.slide.page], { dpi: SLIDE_DPI });
-							if (!rendered) return `Slide ${c.slide.page} could not be rendered.`;
-							cached = writeCachedFigure(env.cacheRoot, env.chatId, key, "image/png", rendered.png);
-						} catch (err) {
-							return `The slide could not be rendered: ${err instanceof Error ? err.message : String(err)}`;
-						}
-					}
-					return showToModel(c, { file: cached.file, mime: cached.mime }, cached.bytes);
-				}
-				if (!c.imageUrl) return `${id} has no picture to look at.`;
-				const source = figureSourceById(c.sourceId);
-				if (!source) return `${id} is not from an allowed source.`;
-				if (!figureImageAllowed(source, c.imageUrl)) return `${id}: ${source.name} does not allow this picture to be fetched. Give its page as a link.`;
-				const key = figureKey("image", c.imageUrl);
-				let cached = findCachedFigure(env.cacheRoot, env.chatId, key);
-				if (!cached) {
-					const fetched = await fetchFigureImage(c.imageUrl, {
-						allow: (u) => figureImageAllowed(source, u.toString()),
-						fetchImpl: env.fetchImpl,
-						signal: signalOf(),
-					});
-					if (!fetched.ok) return failureText("Fetching the picture", fetched) + (c.pageUrl ? ` Its page (${id}) can still be given as a link.` : "");
-					cached = writeCachedFigure(env.cacheRoot, env.chatId, key, fetched.mime, fetched.bytes);
-				}
-				return showToModel(c, { file: cached.file, mime: cached.mime }, cached.bytes);
+			description: `Fetch candidate pictures (slides or images) and show them to you: one id, or up to ${LOOK_MAX} ids to compare side by side. You must look before show_image.`,
+			parameters: lookInput,
+			execute: serverExecute("look", lookInput, async ({ id, ids }): Promise<string | ImageFileResult> => {
+				const wanted = [...new Set([...(ids ?? []), ...(id ? [id] : [])].map((x) => x.trim()).filter(Boolean))].slice(0, LOOK_MAX);
+				if (wanted.length === 0) return "Give the id (or ids) of the candidates to look at.";
+				// Fetched together: several pictures cost one step, not one step each.
+				const looked = await Promise.all(wanted.map((one) => lookOne(one)));
+				if (looked.length === 1) return looked[0]!;
+				const hasPicture = (r: string | ImageFileResult): r is ImageFileResult => typeof r !== "string" && (r.images?.length ?? 0) > 0;
+				const shown = looked.filter(hasPicture);
+				const text = looked.map((r) => (typeof r === "string" ? r : r.text)).join("\n\n");
+				const order = wanted.filter((_, i) => hasPicture(looked[i]!)).join(", ");
+				return {
+					text: shown.length > 0 ? `${text}\n\nThe pictures below are in this order: ${order}.` : text,
+					images: shown.flatMap((r) => r.images ?? []),
+				};
 			}),
 		},
 
@@ -360,13 +400,14 @@ function createFigureTools(
 			label: "show_image",
 			description: "FINISH: show the picture you looked at in the lesson, with your caption and the key feature. Only when you are confident it matches.",
 			parameters: showInput,
-			execute: serverExecute("show_image", showInput, (args): string => {
+			execute: serverExecute("show_image", showInput, async (args): Promise<string> => {
 				const c = registry.get(args.id);
 				if (!c) return `No candidate ${args.id}.`;
 				const viewed = registry.viewed.get(c.id);
 				if (!viewed) return `Look at ${c.id} first: a picture is shown only after you have seen it.`;
 				const shows = oneLine(args.shows, 400);
 				const keyFeature = oneLine(args.key_feature, 300);
+				const notShown = args.not_shown?.trim() ? oneLine(args.not_shown, 300) : undefined;
 				const shownAsLink = (why: string): string => {
 					if (!c.pageUrl) {
 						decide({ result: noneResult(input, `${c.title} may be relevant, but ${why}, so it is not shown. Tell the learner where to look: ${c.title}.`) });
@@ -380,18 +421,26 @@ function createFigureTools(
 				if (c.kind !== "slide" && (!source || source.embed === "never" || !c.licence)) {
 					return shownAsLink("no reusable licence was read for this picture");
 				}
+				// A library page: show only the band holding the figure, when the finder gave one.
+				let shown: Viewed = viewed;
+				if (c.kind === "slide" && c.slide && args.crop) {
+					const band = await figureBand(env, c.slide, viewed, args.crop);
+					if (band) shown = band;
+				}
 				const image: FigureImage = {
-					file: viewed.file,
-					mime: viewed.mime,
+					file: shown.file,
+					mime: shown.mime,
 					tier: c.tier as FigureImage["tier"],
 					source: c.sourceName,
 					...(c.pageUrl ? { sourceUrl: c.pageUrl } : {}),
 					title: c.title,
 					credit: c.kind === "slide" ? `From your library: ${c.slide?.bookTitle ?? c.title}` : candidateCredit(c),
-					licence: c.kind === "slide" ? "Your own lecture material" : c.licence!.label,
+					// A page of a textbook in the library is the learner's copy of someone else's book,
+					// not their lecture material: only slide decks are labelled as their own.
+					licence: c.kind === "slide" ? (c.sourceName === LECTURE_SLIDES ? "Your own lecture material" : "Your library copy (personal study)") : c.licence!.label,
 					...(c.licence?.url ? { licenceUrl: c.licence.url } : {}),
 				};
-				decide({ result: imageResult(input, image, shows, keyFeature) });
+				decide({ result: imageResult(input, image, shows, keyFeature, notShown) });
 				return "Recorded: the picture will be shown in the lesson.";
 			}),
 		},
@@ -426,20 +475,43 @@ function createFigureTools(
 	};
 }
 
+/** The cropped band of a rendered library page, cached beside the page. Null = show the whole page. */
+async function figureBand(
+	env: FigureFinderEnv,
+	slide: { bookId: string; page: number },
+	page: Viewed,
+	crop: { top: number; bottom: number },
+): Promise<Viewed | null> {
+	const top = Math.max(0, Math.min(crop.top, crop.bottom) - CROP_MARGIN);
+	const bottom = Math.min(1, Math.max(crop.top, crop.bottom) + CROP_MARGIN);
+	if (bottom - top < CROP_MIN_SPAN || (top === 0 && bottom === 1)) return null;
+	const key = figureKey("slide-band", slide.bookId, slide.page, SLIDE_DPI, top.toFixed(3), bottom.toFixed(3));
+	const cached = findCachedFigure(env.cacheRoot, env.chatId, key);
+	if (cached) return { file: cached.file, mime: cached.mime };
+	const whole = readCachedFigure(env.cacheRoot, env.chatId, page.file);
+	if (!whole) return null;
+	const band = await cropVerticalBand(whole.bytes, top, bottom);
+	if (!band) return null;
+	const written = writeCachedFigure(env.cacheRoot, env.chatId, key, "image/png", band);
+	return { file: written.file, mime: written.mime };
+}
+
 // ─── results (the wording the tutor reads is set here, not by the model) ──────
 
-export function imageResult(input: FigureToolInput, image: FigureImage, shows: string, keyFeature: string): FigureResult {
+export function imageResult(input: FigureToolInput, image: FigureImage, shows: string, keyFeature: string, notShown?: string): FigureResult {
 	return {
 		concept: input.concept,
 		outcome: "image",
 		image,
 		caption: shows,
 		keyFeature,
+		...(notShown ? { notShown } : {}),
 		links: [],
 		brief: [
 			`A real figure is now shown in the lesson (it is not drawn): "${image.title}" — ${image.source}, ${image.licence}. The credit and source link are printed on the card.`,
 			`It shows: ${shows}`,
 			`Key feature to point at: ${keyFeature}`,
+			...(notShown ? [`It does not show: ${notShown} (the card says so). Cover that part in words; never claim the picture shows it.`] : []),
 			"Teach with it: say what it shows, then point the learner at that feature. If something in the picture does not fit your concept, say so plainly instead of forcing it.",
 		].join("\n"),
 	};
@@ -534,8 +606,10 @@ function activityLine(toolName: string, args: unknown): string {
 			return `open-access articles: "${a.query ?? ""}"`;
 		case "site_search":
 			return `${a.source ?? "site"}: "${a.query ?? ""}"`;
-		case "look":
-			return "looking at a candidate";
+		case "look": {
+			const n = Array.isArray((args as { ids?: unknown })?.ids) ? ((args as { ids: unknown[] }).ids.length) : 1;
+			return n > 1 ? `comparing ${n} candidates` : "looking at a candidate";
+		}
 		case "page_images":
 		case "europepmc_figures":
 			return "reading a page";

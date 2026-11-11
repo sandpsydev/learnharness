@@ -100,6 +100,12 @@ export function FigureOutputCard({ output }: { output: unknown }) {
 							{result.keyFeature}
 						</span>
 					)}
+					{result.notShown && (
+						<span className="text-muted-foreground" data-testid="figure-not-shown">
+							<span className="font-medium text-foreground">Not in this picture: </span>
+							{result.notShown}
+						</span>
+					)}
 					<span className="break-words text-xs text-muted-foreground" data-testid="figure-credit">
 						{image.credit} · {image.licenceUrl && isHttps(image.licenceUrl) ? <ExternalLink href={image.licenceUrl}>{image.licence}</ExternalLink> : image.licence}
 						{isHttps(image.sourceUrl) && (

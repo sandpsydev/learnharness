@@ -137,6 +137,97 @@ describe("the learner's own slides come first", () => {
 	});
 });
 
+describe("a textbook page from the library", () => {
+	it("is credited as the learner's library copy, never as their own lecture material", async () => {
+		// Live case (2026-11-12): a Schwartz textbook page was labelled "Your own lecture material".
+		const book = { id: "book_2", kind: "pdf", title: "Schwartz's Principles of Surgery", fileName: "s.pdf", pageCount: 2000 } as unknown as LibraryBook;
+		const reader = {
+			hasBooks: () => true,
+			async search() {
+				return { hits: [{ book, chunk: { index: 0, page: 1288, section: "Colon", text: "Figure 29-1. Arterial blood supply to the colon." }, score: 1, via: ["keyword" as const] }], notes: [] };
+			},
+			read: () => ({ ok: false, error: "unused" }),
+		} as unknown as LibraryReader;
+		const e = env({ cacheRoot: newRoot(), library: { reader, pdfPath: (id) => `/library/${id}/source.pdf` }, headless: fakeHeadless([]) });
+		const result = await run(
+			[
+				[["slides_search", { query: "colon arterial supply" }]],
+				[["look", { id: "c1" }]],
+				[["show_image", { id: "c1", shows: "Schwartz Figure 29-1.", key_feature: "the marginal artery", confident: true }]],
+			],
+			e,
+		);
+		assert.equal(result.image?.source, "Your library");
+		assert.equal(result.image?.licence, "Your library copy (personal study)");
+		assert.doesNotMatch(result.brief, /lecture material/);
+	});
+});
+
+describe("cropping a library page to its figure", () => {
+	/** A 100×400 PNG page (Photon builds it from raw RGBA). */
+	async function tallPage(): Promise<Buffer> {
+		const photon = await import("@silvia-odwyer/photon-node");
+		const img = new photon.PhotonImage(new Uint8Array(100 * 400 * 4).fill(200), 100, 400);
+		try {
+			return Buffer.from(img.get_bytes());
+		} finally {
+			img.free();
+		}
+	}
+	async function dims(bytes: Uint8Array): Promise<[number, number]> {
+		const photon = await import("@silvia-odwyer/photon-node");
+		const img = photon.PhotonImage.new_from_byteslice(bytes);
+		try {
+			return [img.get_width(), img.get_height()];
+		} finally {
+			img.free();
+		}
+	}
+	function pageEnv(cacheRoot: string, page: Buffer, fetchImpl?: typeof fetch): FigureFinderEnv {
+		const headless = () =>
+			({ available: () => true, renderPdfPages: async (_p: string, pages: number[]) => pages.map((n) => ({ page: n, png: page })) }) as unknown as HeadlessApi;
+		return env({ cacheRoot, library: { reader: fakeLibrary(), pdfPath: (id) => `/library/${id}/source.pdf` }, headless, fetchImpl });
+	}
+	const show = (crop: unknown): Array<[string, unknown]>[] => [
+		[["slides_search", { query: "pneumothorax" }]],
+		[["look", { id: "c1" }]],
+		[["show_image", { id: "c1", shows: "Figure 3-2.", key_feature: "the pleural line", confident: true, crop }]],
+	];
+
+	it("shows only the band holding the figure, with a safety margin, cached beside the page", async () => {
+		const cacheRoot = newRoot();
+		const result = await run(show({ top: 0.1, bottom: 0.4 }), pageEnv(cacheRoot, await tallPage()));
+		assert.equal(result.outcome, "image");
+		const shown = readCachedFigure(cacheRoot, CHAT, result.image!.file)!;
+		const [w, h] = await dims(shown.bytes);
+		assert.equal(w, 100, "full width");
+		// 0.07..0.43 of 400 px (the 0.03 margin on each side).
+		assert.ok(h >= 140 && h <= 148, `band height ${h}`);
+	});
+
+	it("shows the whole page when the band is too thin or covers everything", async () => {
+		for (const crop of [{ top: 0.5, bottom: 0.52 }, { top: 0, bottom: 1 }]) {
+			const cacheRoot = newRoot();
+			const result = await run(show(crop), pageEnv(cacheRoot, await tallPage()));
+			const [, h] = await dims(readCachedFigure(cacheRoot, CHAT, result.image!.file)!.bytes);
+			assert.equal(h, 400, JSON.stringify(crop));
+		}
+	});
+
+	it("never crops an outside picture (its licence may forbid changes)", async () => {
+		const cacheRoot = newRoot();
+		const result = await run(
+			[
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { id: "c1" }]],
+				[["show_image", { id: "c1", shows: "Apical pneumothorax.", key_feature: "the apex", confident: true, crop: { top: 0.1, bottom: 0.4 } }]],
+			],
+			env({ cacheRoot, fetchImpl: network({ [COMMONS_API]: COMMONS, [COMMONS_IMG]: COMMONS_IMAGE }, []) }),
+		);
+		assert.deepEqual(readCachedFigure(cacheRoot, CHAT, result.image!.file)!.bytes, Uint8Array.from(PNG));
+	});
+});
+
 describe("open sources", () => {
 	it("shows a Commons picture with its credit, licence and source link, and fetches it once per session", async () => {
 		const cacheRoot = newRoot();
@@ -247,6 +338,77 @@ describe("open sources", () => {
 		assert.equal(result.image?.licence, "CC BY");
 		assert.equal(result.image?.sourceUrl, "https://europepmc.org/article/PMC/13676449");
 		assert.match(result.image!.title, /Figure 1$/);
+	});
+});
+
+describe("fewer steps, honest partial matches", () => {
+	it("one look compares several candidates (a slide and a Commons picture) and either can then be shown", async () => {
+		const log: string[] = [];
+		const renders: Array<{ path: string; pages: number[]; dpi?: number }> = [];
+		const e = env({
+			cacheRoot: newRoot(),
+			library: { reader: fakeLibrary(), pdfPath: (id) => `/library/${id}/source.pdf` },
+			headless: fakeHeadless(renders),
+			fetchImpl: network({ [COMMONS_API]: COMMONS, [COMMONS_IMG]: COMMONS_IMAGE }, log),
+		});
+		const result = await run(
+			[
+				[["slides_search", { query: "pneumothorax" }]],
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { ids: ["c1", "c2"] }]],
+				[["show_image", { id: "c2", shows: "Apical pneumothorax on CT and chest X-ray.", key_feature: "the pleural line at the apex", confident: true }]],
+			],
+			e,
+		);
+		assert.equal(result.outcome, "image", "both were seen in the one look, so the second may be shown");
+		assert.equal(result.image?.tier, "commons");
+		assert.equal(renders.length, 1, "the slide was rendered in the same look");
+		assert.equal(log.filter((u) => u === COMMONS_IMG).length, 1);
+	});
+
+	it("a look over a page and a picture still shows the picture and says why the page cannot be seen", async () => {
+		const e = env({ cacheRoot: newRoot(), fetchImpl: network({ [COMMONS_API]: COMMONS, [COMMONS_IMG]: COMMONS_IMAGE }, []) });
+		const result = await run(
+			[
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { ids: ["c1", "c99"] }]],
+				[["show_image", { id: "c1", shows: "Apical pneumothorax.", key_feature: "the apex", confident: true }]],
+			],
+			e,
+		);
+		assert.equal(result.outcome, "image");
+	});
+
+	it("shows the best picture with what it lacks, instead of a link, when it covers the core of the concept", async () => {
+		// Live case (2026-11-12): the finder looked at a CC-licensed OpenStax peritoneum drawing and the
+		// learner's own First Aid page, judged each a partial match, and gave only a link.
+		const e = env({ cacheRoot: newRoot(), fetchImpl: network({ [COMMONS_API]: COMMONS, [COMMONS_IMG]: COMMONS_IMAGE }, []) });
+		const result = await run(
+			[
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { id: "c1" }]],
+				[["show_image", { id: "c1", shows: "Apical pneumothorax on CT and chest X-ray.", key_feature: "the pleural line at the apex", not_shown: "the mediastinal shift asked for", confident: true }]],
+			],
+			e,
+		);
+		assert.equal(result.outcome, "image");
+		assert.equal(result.notShown, "the mediastinal shift asked for");
+		assert.match(result.brief, /It does not show: the mediastinal shift asked for/);
+		assert.match(result.brief, /never claim the picture shows it/);
+	});
+
+	it("a blank not_shown is dropped", async () => {
+		const e = env({ cacheRoot: newRoot(), fetchImpl: network({ [COMMONS_API]: COMMONS, [COMMONS_IMG]: COMMONS_IMAGE }, []) });
+		const result = await run(
+			[
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { id: "c1" }]],
+				[["show_image", { id: "c1", shows: "Apical pneumothorax.", key_feature: "the apex", not_shown: "  ", confident: true }]],
+			],
+			e,
+		);
+		assert.equal(result.notShown, undefined);
+		assert.doesNotMatch(result.brief, /does not show/);
 	});
 });
 

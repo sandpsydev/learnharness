@@ -335,6 +335,47 @@ export class SessionModel {
 		this.onChange?.();
 	}
 
+	/** One POST of an input event, no 409 wait (the text send's steer path). */
+	private postInputOnce(input: ChatInput): Promise<Response> {
+		return this.fetch("/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ chatId: this.chatId, input }),
+		});
+	}
+
+	/** POST one steer for the running turn. "settled" = no live turn (409). */
+	private async postSteer(id: string, text: string): Promise<"delivered" | "settled" | { error: string }> {
+		const res = await this.fetch(`/api/chats/${this.chatId}/steer`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ input: { type: "steer", id, text } }),
+		});
+		if (res.ok) return "delivered";
+		if (res.status === 409) return "settled";
+		return { error: (await res.text()) || `The steer failed (${res.status}).` };
+	}
+
+	/** A text send met a running turn: hand the text to that turn as a
+	 *  steer. The optimistic bubble becomes the queued-steer line only once
+	 *  the steer is accepted; otherwise the bubble stays for the plain send. */
+	private async steerRunningTurn(text: string, optimistic: LhMessage[]): Promise<"delivered" | "settled" | { error: string }> {
+		const id = `steer_${localId()}`;
+		let outcome: "delivered" | "settled" | { error: string };
+		try {
+			outcome = await this.postSteer(id, text);
+		} catch (err) {
+			outcome = { error: (err as Error).message };
+		}
+		if (outcome !== "delivered") return outcome;
+		const ids = new Set(optimistic.map((m) => m.id));
+		this.steerQueueValue = [...this.steerQueueValue, { id, text }];
+		this.mutate(() => {
+			this.tail = this.tail.filter((m) => !ids.has(m.id));
+		});
+		return outcome;
+	}
+
 	/** The 409 identity-retry fetch (the Wave B contract): the event was
 	 *  never persisted (write-ahead happens only on acceptance), so the
 	 *  retry waits out the running turn and re-POSTs the SAME body. */
@@ -726,7 +767,31 @@ export class SessionModel {
 			// starve the connection pool, so it needs no teardown guard. The
 			// STREAM consume stays on the controller — releasing that held
 			// connection is Diet A's whole job.
-			const res = await this.postInputEvent(input);
+			// A TYPED MESSAGE INTO A TURN THIS VIEW HAD NOT SEEN (the "turn is
+			// already running" report, 2026-11-12): a job wake or automatic
+			// follow-up can begin server-side in the moment the learner sends
+			// (typically right after the plan lands). The view still read ready,
+			// so it posted a plain send — and its turn-started guard ignores the
+			// foreign turn while our own send is in flight. Waiting it out could
+			// take longer than the wait-retry's budget (a whole teaching turn),
+			// ending in "Something went wrong". A text send that meets a running
+			// turn STEERS it instead — exactly what typing during a visible turn
+			// does — and attaches to its stream. Only if that turn settled in
+			// between does the plain send (with its wait-retry) run.
+			const steerable = input.type === "text" && onAccepted === undefined;
+			let res = steerable ? await this.postInputOnce(input) : await this.postInputEvent(input);
+			if (res.status === 409 && input.type === "text" && steerable) {
+				await res.body?.cancel().catch(() => {});
+				const steered = await this.steerRunningTurn(input.text, optimistic);
+				if (steered === "delivered") {
+					accepted = true;
+					if (this.consumeAbort !== controller) return true;
+					await this.resumeStream(true);
+					return true;
+				}
+				if (steered !== "settled") throw new Error(steered.error);
+				res = await this.postInputEvent(input);
+			}
 			if (res.status === 409) {
 				throw new Error("A turn is already running — try again in a moment.");
 			}
@@ -814,19 +879,15 @@ export class SessionModel {
 			this.onChange?.();
 		};
 		try {
-			const res = await this.fetch(`/api/chats/${this.chatId}/steer`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ input: { type: "steer", id, text: t } }),
-			});
-			if (res.ok) return; // parked or delivered — the stream lands the card
-			if (res.status === 409) {
+			const outcome = await this.postSteer(id, t);
+			if (outcome === "delivered") return; // parked or delivered — the stream lands the card
+			if (outcome === "settled") {
 				dropSteer();
 				await this.send({ type: "text", text: t }); // the settle race: plain send
 				return;
 			}
 			dropSteer();
-			this.setError((await res.text()) || `The steer failed (${res.status}).`);
+			this.setError(outcome.error);
 		} catch (err) {
 			dropSteer();
 			this.setError((err as Error).message);

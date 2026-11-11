@@ -303,6 +303,9 @@ export interface FigureResult {
 	caption: string;
 	/** Where to look: the one feature the learner should find. */
 	keyFeature: string;
+	/** A shown picture that covers the core of the concept but not every detail
+	 *  asked for: what it does NOT show, said plainly on the card and to the tutor. */
+	notShown?: string;
 	links: FigureLink[];
 	/** Model-facing summary. Failure shape: /^Figure failed:/i. */
 	brief: string;

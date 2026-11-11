@@ -262,6 +262,75 @@ describe("send (one input event, verbatim consumption)", () => {
 		assert.equal(view.at(-1)!.parts.at(-1)!.text, "hello there");
 	});
 
+	it("a text send that meets a turn the view had not seen steers it and attaches — no 30 s wait, no error (the post-plan 409 report)", async () => {
+		// Live report (2026-11-12): the learner typed right after the plan
+		// landed; a job wake had just begun a turn server-side. The plain
+		// send 409'd, waited out the whole teaching turn, then showed
+		// "Something went wrong: A turn is already running".
+		const calls: { url: string; body?: string }[] = [];
+		const m = model({ pollMs: 5, waitMaxMs: 50, fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
+			if (url === "/api/chat") return Response.json({ error: "A turn is already running for this session" }, { status: 409 });
+			if (url === "/api/chats/chat_x/steer") return Response.json({ ok: true });
+			if (url === "/api/chats/chat_x") return Response.json({ messages: [] });
+			if (url === "/api/chats/chat_x/stream")
+				return sseResponse(
+					{ type: "message_start", message: { role: "assistant", content: [] } },
+					partial([{ type: "text", text: "the wake turn" }]),
+					"[DONE]",
+				);
+			if (url.startsWith("/api/jobs")) return Response.json({ turnInFlight: true });
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof globalThis.fetch });
+		const accepted = await m.send({ type: "text", text: "wait, what about the dose?" });
+		assert.equal(accepted, true);
+		assert.equal(calls.filter((c) => c.url === "/api/chat").length, 1, "one POST, no wait-retry loop");
+		assert.equal(calls.filter((c) => c.url.startsWith("/api/jobs")).length, 0, "never polled the running turn");
+		const steer = calls.find((c) => c.url === "/api/chats/chat_x/steer");
+		assert.ok(steer, "the text went to the running turn as a steer");
+		assert.equal(JSON.parse(steer.body!).input.text, "wait, what about the dose?");
+		assert.ok(calls.some((c) => c.url === "/api/chats/chat_x/stream"), "attached to the running turn's stream");
+		assert.equal(m.getState().error, null);
+		assert.equal(m.getState().status, "ready");
+		assert.deepEqual(m.getState().steerQueue.map((s) => s.text), ["wait, what about the dose?"], "shown as a queued steer");
+		assert.equal(m.getState().nativeMessages.some((x) => x.role === "user"), false, "no duplicate optimistic bubble");
+	});
+
+	it("a text send whose racing turn settles before the steer falls back to the plain wait-retry send", async () => {
+		const posts: string[] = [];
+		const m = model({ pollMs: 1, waitMaxMs: 50, fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url === "/api/chat") {
+				posts.push(String(init?.body));
+				return posts.length === 1 ? new Response("busy", { status: 409 }) : Response.json({ ok: true });
+			}
+			if (url === "/api/chats/chat_x/steer") return Response.json({ error: "no live turn to steer" }, { status: 409 });
+			if (url.startsWith("/api/jobs")) return Response.json({ turnInFlight: false });
+			if (url === "/api/chats/chat_x") return Response.json({ messages: [{ id: "u1", role: "user", content: "q", timestamp: 1 }] });
+			if (url === "/api/chats/chat_x/stream") return sseResponse("[DONE]");
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof globalThis.fetch });
+		assert.equal(await m.send({ type: "text", text: "q" }), true);
+		assert.equal(posts.length, 2, "the 409, then the identity retry");
+		assert.equal(posts[1], posts[0]);
+		assert.equal(m.getState().error, null);
+		assert.deepEqual(m.getState().steerQueue, []);
+	});
+
+	it("only typed text steers: a 409 practice submission keeps the wait-retry path", async () => {
+		const urls: string[] = [];
+		const m = model({ pollMs: 1, waitMaxMs: 5, fetch: (async (input: RequestInfo | URL) => {
+			urls.push(String(input));
+			if (String(input) === "/api/chat") return new Response("busy", { status: 409 });
+			if (String(input).startsWith("/api/jobs")) return Response.json({ turnInFlight: true });
+			throw new Error(`unexpected fetch: ${String(input)}`);
+		}) as typeof globalThis.fetch });
+		await m.send({ type: "thinking", problemCallId: "p1", text: "my working" });
+		assert.equal(urls.some((u) => u.endsWith("/steer")), false);
+		assert.equal(m.getState().status, "error");
+	});
+
 	it("N id-less updates replace the SAME tail slot (the per-chunk divider bug pin)", async () => {
 		// pi's wire (captured live, 2026-09-26): message_start/update/end carry
 		// AssistantMessages with NO id. The bug: minting a fresh id per event
@@ -1011,6 +1080,8 @@ describe("answer submission recovery", () => {
 				}
 				if (String(url).startsWith("/api/jobs")) return Response.json({ turnInFlight: false });
 				if (String(url).endsWith("/stream")) return sseResponse("[DONE]");
+				// The racing turn settled before a steer could reach it.
+				if (String(url).endsWith("/steer")) return Response.json({ error: "no live turn to steer" }, { status: 409 });
 				return Response.json({ messages: [], turnInFlight: true });
 			} });
 			await m.send({ type: "text", text: "original input" });

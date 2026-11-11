@@ -205,6 +205,7 @@ export function OrganizerPanelBody({
 	return (
 		<div
 			data-testid="organizer-panel"
+			data-graph-occluder=""
 			className="absolute right-0 top-full z-30 mt-2 flex h-[min(34rem,70vh)] w-[26rem] max-w-[calc(100vw-1.5rem)] flex-col rounded-xl border bg-card/95 text-xs shadow-lg backdrop-blur"
 		>
 			<div className="flex items-center justify-between border-b px-3 py-2">

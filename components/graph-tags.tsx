@@ -215,6 +215,7 @@ export function GraphTagsPanel({
 			{open && (
 				<div
 					data-testid="tag-filter-panel"
+					data-graph-occluder=""
 					className="absolute right-0 top-full z-20 mt-2 max-h-[60vh] w-80 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl border bg-card/95 p-3 text-xs shadow-lg backdrop-blur"
 				>
 					<div className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">

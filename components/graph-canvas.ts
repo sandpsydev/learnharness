@@ -55,6 +55,8 @@ import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import { clusterHue, type Pt } from "./cluster-geometry.ts";
+import { placeLabels, type LabelCandidate, type LabelObstacle, type Rect } from "./graph-labels.ts";
+import { centreTransform, fitTransform, NO_INSETS, sameInsets, type Insets } from "./graph-viewport.ts";
 import {
 	CHARGE_STRENGTH,
 	CLUSTER_PULL_STRENGTH,
@@ -126,6 +128,9 @@ export interface CanvasColors {
 	edge: string;
 	label: string;
 	hoverText: string;
+	/** The page background: backs a hovered topic's name when its label was
+	 *  hidden to avoid a collision. Optional (falls back to no backing). */
+	background?: string;
 }
 
 /** A labelled circle drawn behind a group of nodes (the bubble view's organ-system frames). */
@@ -177,6 +182,9 @@ export interface RendererCallbacks {
 	/** The live sim settled after a drag: commit the new rest state
 	 *  (the caller PUTs it to the positions ledger). */
 	onCommit: (positions: Record<string, Position>) => void;
+	/** The canvas edges the floating panels cover right now (toolbar, outline,
+	 *  the home dock). Fitting and focusing frame into what is left. */
+	getInsets?: () => Insets;
 }
 
 // ─── Constants (ported verbatim from the sigma view) ────────────────────────
@@ -328,6 +336,12 @@ const TOPIC_PILL_H = 20;
 const TOPIC_PILL_PAD = 26;
 const TOPIC_PICK_PAD = 4;
 const FRAME_LABEL_PX = 13;
+/** Topic-name line pitch (px) and the gaps label placement keeps (px). */
+const TOPIC_LINE_H = TOPIC_LABEL_PX * 1.25;
+const TOPIC_LABEL_GAP = 4;
+const TOPIC_LABEL_PAD = 2;
+/** A bubble shows its count from this on-screen radius (px) up. */
+const TOPIC_COUNT_MIN_R = 9;
 /** Stroke multiple for an aggregated edge. */
 const HEAVY_EDGE = 2.2;
 
@@ -457,20 +471,9 @@ export function labelAlpha(
 	return clamp01(1 - (ratio - labelZoom) / span);
 }
 
-/** The camera transform that frames `bbox` in a w×h viewport with padding. */
-export function fitTransform(
-	bbox: { minX: number; maxX: number; minY: number; maxY: number },
-	w: number,
-	h: number,
-	padding: number,
-): { x: number; y: number; k: number } {
-	const bw = Math.max(bbox.maxX - bbox.minX, 1e-6);
-	const bh = Math.max(bbox.maxY - bbox.minY, 1e-6);
-	const k = Math.min((w - 2 * padding) / bw, (h - 2 * padding) / bh);
-	const cx = (bbox.minX + bbox.maxX) / 2;
-	const cy = (bbox.minY + bbox.maxY) / 2;
-	return { x: w / 2 - cx * k, y: h / 2 - cy * k, k };
-}
+/** The camera transform that frames `bbox` in a w×h viewport with padding
+ *  (and, optionally, clear of the panels' insets) — see graph-viewport.ts. */
+export { fitTransform };
 
 /** The arrowhead geometry for a directed edge a→b: shaft endpoints
  *  (clear of both node discs) and the head triangle (tip on the target
@@ -586,14 +589,37 @@ function drawNameLines(
 	lines: string[],
 	world: WorldSizes,
 	color: string,
+	/** Above the node instead (label placement found no room below). */
+	above = false,
 ): void {
 	context.fillStyle = color;
 	context.textAlign = "center";
 	context.textBaseline = "top";
-	const firstTop = y + world.nodeR + world.labelGap;
+	const lineH = world.labelSize * LABEL_LINE_HEIGHT;
+	const firstTop = above
+		? y - world.nodeR - world.labelGap - lines.length * lineH
+		: y + world.nodeR + world.labelGap;
 	for (let i = 0; i < lines.length; i++) {
-		context.fillText(lines[i]!, x, firstTop + i * world.labelSize * LABEL_LINE_HEIGHT);
+		context.fillText(lines[i]!, x, firstTop + i * lineH);
 	}
+}
+
+/** Where a topic name's first line goes (centre x, top y) for each label
+ *  spot: 0 below the bubble, 1 above, 2 right, 3 left — the same order and
+ *  geometry as the spots topicLabelsAt offers, in whatever units it is given. */
+function topicLabelAnchor(
+	x: number,
+	y: number,
+	r: number,
+	spot: number,
+	h: number,
+	w: number,
+	gap: number,
+): { x: number; top: number } {
+	if (spot === 1) return { x, top: y - r - gap - h };
+	if (spot === 2) return { x: x + r + gap + w / 2, top: y - h / 2 };
+	if (spot === 3) return { x: x - r - gap - w / 2, top: y - h / 2 };
+	return { x, top: y + r + gap };
 }
 
 // ─── The renderer ───────────────────────────────────────────────────────────
@@ -616,6 +642,13 @@ export class GraphCanvasRenderer {
 	/** World-space bounds of the current nodes — fit() and the resize-time
 	 *  kFit refresh share it (computed once per setData, not per resize). */
 	private worldBBox: { minX: number; maxX: number; minY: number; maxY: number } | null = null;
+	/** The last framing the APP chose (fit or focusOn) and the insets it used,
+	 *  kept until the learner moves the camera: when a panel then grows,
+	 *  shrinks, opens or closes, the same framing is redone clear of it. */
+	private lastFrame:
+		| { kind: "fit"; insets: Insets }
+		| { kind: "focus"; ids: ReadonlySet<string>; maxFit: number; insets: Insets }
+		| null = null;
 
 	private data: CanvasData | null = null;
 	/** id -> node for the current data (avoids O(n^2) scans). */
@@ -686,7 +719,15 @@ export class GraphCanvasRenderer {
 	private dimHeavyShaftsPath: Path2D = new Path2D();
 	private dimHeadsPath: Path2D = new Path2D();
 	/** Topic markers of the bubble view, with their pre-wrapped screen-size labels. */
-	private topicMarks: { node: CanvasNode; lines: string[]; pillW: number }[] = [];
+	private topicMarks: { node: CanvasNode; lines: string[]; pillW: number; labelW: number }[] = [];
+	/** System-name widths (px at FRAME_LABEL_PX), for label placement. */
+	private frameLabelW = new Map<string, number>();
+	/** Bubble view: where each fact label sits (0 below, 1 above); a fact
+	 *  missing here has no clear spot and shows on hover only. null = every
+	 *  label below its node (the All facts view, unchanged). */
+	private factLabelAt: Map<string, number> | null = null;
+	/** Topic-name placement for one zoom (screen-sized names: room depends on k). */
+	private topicLabelPlan: { k: number; version: number; at: Map<string, number> } | null = null;
 	private topicMarkById = new Map<string, { pillW: number }>();
 	private regionCanvas: HTMLCanvasElement | null = null;
 	/** World rect the bitmap covers (drawImage target coords). */
@@ -722,7 +763,9 @@ export class GraphCanvasRenderer {
 		// transform change just marks dirty (draws happen in OUR loop).
 		this.zoomBehavior = zoom<HTMLCanvasElement, unknown>()
 			.scaleExtent([0.02, 40])
-			.on("zoom", ({ transform }) => {
+			.on("zoom", ({ transform, sourceEvent }) => {
+				// A drag or pinch is the learner taking the camera: stop re-framing.
+				if (sourceEvent) this.lastFrame = null;
 				this.transform = transform;
 				this.markDirty();
 				// The transform doubles as the persistence payload (view state).
@@ -936,9 +979,13 @@ export class GraphCanvasRenderer {
 		const w = this.canvas.clientWidth;
 		const h = this.canvas.clientHeight;
 		if (w < 10 || h < 10) return; // layout not ready yet; the ResizeObserver retries
-		const t = fitTransform(this.worldBBox, w, h, 40);
-		this.kFit = t.k;
+		const insets = this.insets();
+		const t = fitTransform(this.worldBBox, w, h, 40, insets);
+		// kFit stays the whole-canvas framing: the label gate and focusOn's
+		// zoom cap keep their meaning however much the panels cover.
+		this.refreshFitZoom();
 		this.hasFit = true;
+		this.lastFrame = { kind: "fit", insets };
 		select(this.canvas).call(
 			this.zoomBehavior.transform,
 			zoomIdentity.translate(t.x, t.y).scale(t.k),
@@ -965,13 +1012,31 @@ export class GraphCanvasRenderer {
 			if (n.x > maxX) maxX = n.x;
 			if (n.y > maxY) maxY = n.y;
 		}
-		const t = fitTransform({ minX, maxX, minY, maxY }, w, h, 80);
+		const insets = this.insets();
+		const t = fitTransform({ minX, maxX, minY, maxY }, w, h, 80, insets);
 		// Never closer than maxFit x the whole-graph framing, never outside the zoom range.
 		const [kMin, kMax] = this.zoomBehavior.scaleExtent();
 		const k = Math.min(Math.max(t.k, kMin), kMax, Math.max(this.kFit, 1e-6) * maxFit);
-		const cx = (minX + maxX) / 2;
-		const cy = (minY + maxY) / 2;
-		select(this.canvas).call(this.zoomBehavior.transform, zoomIdentity.translate(w / 2 - cx * k, h / 2 - cy * k).scale(k));
+		const c = centreTransform((minX + maxX) / 2, (minY + maxY) / 2, k, w, h, insets);
+		select(this.canvas).call(this.zoomBehavior.transform, zoomIdentity.translate(c.x, c.y).scale(k));
+		this.lastFrame = { kind: "focus", ids, maxFit, insets };
+	}
+
+	/** The floating panels changed size or came and went. If the camera is
+	 *  still where the app last framed it (the learner has not panned or
+	 *  zoomed since), frame the same thing again clear of the panels now. */
+	viewportChanged(): void {
+		const frame = this.lastFrame;
+		if (!frame) return;
+		const insets = this.insets();
+		if (sameInsets(insets, frame.insets)) return;
+		if (frame.kind === "fit") this.fit();
+		else this.focusOn(frame.ids, frame.maxFit);
+	}
+
+	/** The panels' current insets (none when the caller has no panels). */
+	private insets(): Insets {
+		return this.callbacks.getInsets?.() ?? NO_INSETS;
 	}
 
 	/** Refresh the label-gate's "1×" reference from the current bbox +
@@ -1007,6 +1072,7 @@ export class GraphCanvasRenderer {
 	 *  tick loop (cursor-anchored). Sensitivity formula is d3-zoom's own. */
 	private onWheel = (e: WheelEvent) => {
 		e.preventDefault();
+		this.lastFrame = null; // the learner is zooming: stop re-framing
 		const delta = -e.deltaY * (e.deltaMode === 1 ? 0.05 : e.deltaMode ? 1 : 0.002);
 		const { x, y } = this.eventPos(e);
 		const current = this.zoomTarget?.k ?? this.transform.k;
@@ -1432,6 +1498,39 @@ export class GraphCanvasRenderer {
 		for (const n of data.nodes) {
 			if (isVisible(n.id) && !isImpNodeId(n.id) && n.kind !== "topic") this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
 		}
+		// Bubble view: an open topic packs its facts tight, so their names
+		// would pile up. Place them clear of each other and of the discs,
+		// best-connected facts first. World units: names scale with the graph,
+		// so one placement holds at every zoom. Faded (focus) facts draw no
+		// label and take no room.
+		this.factLabelAt = null;
+		if (data.staticLayout) {
+			const degree = new Map<string, number>();
+			for (const e of data.edges) {
+				degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
+				degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
+			}
+			const lineH = settings.labelSize * LABEL_LINE_HEIGHT;
+			const candidates: LabelCandidate[] = [];
+			const obstacles: LabelObstacle[] = [];
+			for (const [id, lines] of this.labelLines) {
+				const n = this.nodeById.get(id);
+				if (!n) continue;
+				obstacles.push({ x: n.x, y: n.y, r: nodeR, owner: id });
+				if (!this.inFocus(id)) continue;
+				const w = Math.max(...lines.map((l) => ctx.measureText(l).width), 0);
+				const h = lines.length * lineH;
+				candidates.push({
+					id,
+					priority: degree.get(id) ?? 0,
+					spots: [
+						{ x: n.x - w / 2, y: n.y + nodeR + LABEL_GAP, w, h },
+						{ x: n.x - w / 2, y: n.y - nodeR - LABEL_GAP - h, w, h },
+					],
+				});
+			}
+			this.factLabelAt = placeLabels(candidates, { obstacles, pad: settings.labelSize * 0.3 });
+		}
 		// Topic labels are screen-sized (not world-scaled): wrapped once here.
 		this.topicMarks = [];
 		this.topicMarkById = new Map();
@@ -1440,10 +1539,15 @@ export class GraphCanvasRenderer {
 		for (const n of data.nodes) {
 			if (n.kind !== "topic" || !isVisible(n.id)) continue;
 			const lines = wrapRegionLabel(n.open ? `${n.label} · ${n.count ?? 0}` : n.label, n.open ? 240 : 120, n.open ? 1 : 2, measure);
-			const pillW = Math.max(...lines.map(measure), 0) + TOPIC_PILL_PAD;
-			this.topicMarks.push({ node: n, lines, pillW });
+			const labelW = Math.max(...lines.map(measure), 0);
+			const pillW = labelW + TOPIC_PILL_PAD;
+			this.topicMarks.push({ node: n, lines, pillW, labelW });
 			this.topicMarkById.set(n.id, { pillW });
 		}
+		this.frameLabelW = new Map();
+		ctx.font = `600 ${FRAME_LABEL_PX}px ${data.fontFamily}`;
+		for (const f of data.frames ?? []) this.frameLabelW.set(f.id, ctx.measureText(f.label).width);
+		this.topicLabelPlan = null;
 		ctx.font = prevFont;
 	}
 
@@ -1746,17 +1850,63 @@ export class GraphCanvasRenderer {
 		this.regionRect = { minX, minY, w: spanX, h: spanY };
 	}
 
+	/** Where each closed topic's name goes at zoom k (a topicLabelAnchor
+	 *  spot: below, above, right, left; missing = hidden, shown on hover). Names keep their on-screen size while the bubbles
+	 *  scale, so the room depends on k: placed in screen px (the pan offset
+	 *  does not matter) and cached until the zoom or the geometry changes.
+	 *  System names and open-topic headers are always drawn, so they block;
+	 *  in focus mode the focused topics place first. */
+	private topicLabelsAt(k: number, data: CanvasData): Map<string, number> {
+		const plan = this.topicLabelPlan;
+		if (plan && plan.k === k && plan.version === this.builtVersion) return plan.at;
+		const fixed: Rect[] = [];
+		const obstacles: LabelObstacle[] = [];
+		const candidates: LabelCandidate[] = [];
+		const frameH = FRAME_LABEL_PX * 1.2;
+		for (const f of data.frames ?? []) {
+			const w = this.frameLabelW.get(f.id) ?? 0;
+			fixed.push({ x: f.x * k - w / 2, y: (f.y - f.r) * k - 3 - frameH, w, h: frameH });
+		}
+		for (const { node: n, lines, pillW, labelW } of this.topicMarks) {
+			const sx = n.x * k;
+			const sy = n.y * k;
+			if (n.open) {
+				fixed.push({ x: sx - pillW / 2, y: sy - TOPIC_PILL_H / 2, w: pillW, h: TOPIC_PILL_H });
+				continue;
+			}
+			const r = (n.radius ?? 8) * k;
+			// A name may cross another bubble's outline (it has a halo) but
+			// never its count: text on text is the unreadable case.
+			if (r >= TOPIC_COUNT_MIN_R) obstacles.push({ x: sx, y: sy, r: TOPIC_COUNT_PX * 0.75, owner: n.id });
+			const h = lines.length * TOPIC_LINE_H;
+			candidates.push({
+				id: n.id,
+				priority: (this.focus && this.inFocus(n.id) ? 1e9 : 0) + (n.count ?? 0),
+				spots: [
+					{ x: sx - labelW / 2, y: sy + r + TOPIC_LABEL_GAP, w: labelW, h },
+					{ x: sx - labelW / 2, y: sy - r - TOPIC_LABEL_GAP - h, w: labelW, h },
+					{ x: sx + r + TOPIC_LABEL_GAP, y: sy - h / 2, w: labelW, h },
+					{ x: sx - r - TOPIC_LABEL_GAP - labelW, y: sy - h / 2, w: labelW, h },
+				],
+			});
+		}
+		const at = placeLabels(candidates, { obstacles, fixed, pad: TOPIC_LABEL_PAD });
+		this.topicLabelPlan = { k, version: this.builtVersion, at };
+		return at;
+	}
+
 	/** Topic markers: a closed topic is a translucent bubble with its fact count
-	 *  inside and its name below; an open one is a dashed ring with a header pill
+	 *  inside and its name beside it where there is room (topicLabelsAt); an open one is a dashed ring with a header pill
 	 *  ("− Name · 12") at the top that closes it. Text and strokes keep a
 	 *  constant on-screen size (÷ k); a faded topic (focus mode) dims whole. */
 	private drawTopics(ctx: CanvasRenderingContext2D, k: number, data: CanvasData): void {
 		if (this.topicMarks.length === 0) return;
 		const color = data.colors.node;
 		const text = data.colors.hoverText;
+		const labelAt = this.topicLabelsAt(k, data);
 		ctx.save();
 		ctx.textAlign = "center";
-		for (const { node: n, lines, pillW } of this.topicMarks) {
+		for (const { node: n, lines, pillW, labelW } of this.topicMarks) {
 			const r = n.radius ?? 8;
 			ctx.globalAlpha = this.inFocus(n.id) ? 1 : DIM_ALPHA * 2;
 			if (!n.open) {
@@ -1768,15 +1918,28 @@ export class GraphCanvasRenderer {
 				ctx.strokeStyle = rgbaFromHex(color, 0.85);
 				ctx.stroke();
 				ctx.fillStyle = text;
-				if (r * k >= 9) {
+				if (r * k >= TOPIC_COUNT_MIN_R) {
 					ctx.font = `700 ${TOPIC_COUNT_PX / k}px ${data.fontFamily}`;
 					ctx.textBaseline = "middle";
 					ctx.fillText(String(n.count ?? 0), n.x, n.y);
 				}
-				ctx.font = `600 ${TOPIC_LABEL_PX / k}px ${data.fontFamily}`;
-				ctx.textBaseline = "top";
-				const lineH = (TOPIC_LABEL_PX * 1.25) / k;
-				lines.forEach((line, i) => ctx.fillText(line, n.x, n.y + r + 4 / k + i * lineH));
+				// The name: below the bubble, else above, else (no room) on hover only.
+				const at = labelAt.get(n.id);
+				if (at !== undefined) {
+					ctx.font = `600 ${TOPIC_LABEL_PX / k}px ${data.fontFamily}`;
+					ctx.textBaseline = "top";
+					const lineH = TOPIC_LINE_H / k;
+					const { x, top } = topicLabelAnchor(n.x, n.y, r, at, lines.length * lineH, labelW / k, TOPIC_LABEL_GAP / k);
+					// A thin halo in the page colour keeps the name readable
+					// where it crosses another bubble or an edge.
+					if (data.colors.background) {
+						ctx.lineJoin = "round";
+						ctx.lineWidth = 3 / k;
+						ctx.strokeStyle = rgbaFromHex(data.colors.background, 0.8);
+						lines.forEach((line, i) => ctx.strokeText(line, x, top + i * lineH));
+					}
+					lines.forEach((line, i) => ctx.fillText(line, x, top + i * lineH));
+				}
 			} else {
 				// The ring round the open topic's facts: centre is a radius below the header.
 				ctx.beginPath();
@@ -1922,7 +2085,9 @@ export class GraphCanvasRenderer {
 			for (const [id, lines] of this.labelLines) {
 				const n = this.nodeById.get(id);
 				if (!n || !this.inFocus(id)) continue;
-				drawNameLines(ctx, n.x, n.y, lines, this.world, data.colors.label);
+				const at = this.factLabelAt ? this.factLabelAt.get(id) : 0;
+				if (at === undefined) continue; // no clear spot: shows on hover
+				drawNameLines(ctx, n.x, n.y, lines, this.world, data.colors.label, at === 1);
 			}
 			ctx.restore();
 		}
@@ -1947,7 +2112,31 @@ export class GraphCanvasRenderer {
 				ctx.save();
 				ctx.globalAlpha = this.hoverFade;
 				ctx.font = this.worldLabelFont;
-				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, data.colors.hoverText);
+				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, data.colors.hoverText, this.factLabelAt?.get(n.id) === 1);
+				ctx.restore();
+			}
+			// A topic whose name was hidden for room shows it while hovered,
+			// on a backing so it reads over its neighbours.
+			const t = this.hoverNode.kind === "topic" && !this.hoverNode.open ? this.hoverNode : null;
+			const mark = t && !this.topicLabelsAt(k, data).has(t.id) ? this.topicMarks.find((m) => m.node === t) : undefined;
+			if (t && mark && (!this.visible || this.visible.has(t.id))) {
+				ctx.save();
+				ctx.globalAlpha = this.hoverFade;
+				const r = t.radius ?? 8;
+				const lineH = TOPIC_LINE_H / k;
+				const top = t.y + r + TOPIC_LABEL_GAP / k;
+				if (data.colors.background) {
+					const padX = 4 / k;
+					ctx.beginPath();
+					ctx.roundRect(t.x - mark.labelW / (2 * k) - padX, top - 2 / k, mark.labelW / k + 2 * padX, mark.lines.length * lineH + 4 / k, 4 / k);
+					ctx.fillStyle = rgbaFromHex(data.colors.background, 0.85);
+					ctx.fill();
+				}
+				ctx.fillStyle = data.colors.hoverText;
+				ctx.font = `600 ${TOPIC_LABEL_PX / k}px ${data.fontFamily}`;
+				ctx.textAlign = "center";
+				ctx.textBaseline = "top";
+				mark.lines.forEach((line, i) => ctx.fillText(line, t.x, top + i * lineH));
 				ctx.restore();
 			}
 		}

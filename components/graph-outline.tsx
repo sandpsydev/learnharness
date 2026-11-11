@@ -525,6 +525,7 @@ export function GraphOutlinePanel({
 	return (
 		<div
 			data-testid="outline-panel"
+			data-graph-occluder=""
 			// Desktop: a contents column down the left. Phone: a sheet along the bottom.
 			className="lh-no-drag absolute inset-x-2 bottom-2 z-20 flex max-h-[68%] flex-col rounded-xl border bg-card/95 p-2.5 shadow-lg backdrop-blur sm:inset-x-auto sm:bottom-auto sm:left-3 sm:top-14 sm:max-h-[calc(100%-4.25rem)] sm:w-80"
 		>

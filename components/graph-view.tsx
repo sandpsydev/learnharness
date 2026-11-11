@@ -71,6 +71,7 @@ import { FileTextIcon, ListTreeIcon, Loader2Icon, SearchIcon, SettingsIcon, Uplo
 import { incrementalLayout, propositionSessionHref, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { planCostLabel } from "@/components/usage-format";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
+import { OCCLUDER_ATTR, occlusionInsets } from "./graph-viewport.ts";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useActivity } from "@/components/activity-dock";
 import { useServerEvent, useServerResync } from "@/components/server-events";
@@ -1625,6 +1626,13 @@ export function GraphView({
 						body: JSON.stringify(positions),
 					}).catch((err) => console.error("[graph] positions commit failed", err));
 				},
+				// The floating panels over the canvas (toolbar, outline, the home
+				// dock with Tonight's questions): fit and focus frame clear of them.
+				getInsets: () =>
+					occlusionInsets(
+						canvas.getBoundingClientRect(),
+						[...document.querySelectorAll(`[${OCCLUDER_ATTR}]`)].map((el) => el.getBoundingClientRect()),
+					),
 			},
 			initialCamera,
 		);
@@ -1646,6 +1654,20 @@ export function GraphView({
 		};
 	}, [isEmpty]);
 
+	// The panels over the graph grow and shrink (Tonight's questions loads
+	// after the first fit; the focus chip comes and goes) and the outline
+	// opens and closes: re-frame clear of them while the camera is still where
+	// the app put it. Re-scanned when the outline panel mounts or unmounts.
+	useEffect(() => {
+		if (isEmpty) return;
+		const observer = new ResizeObserver(() => rendererRef.current?.viewportChanged());
+		for (const el of document.querySelectorAll(`[${OCCLUDER_ATTR}]`)) observer.observe(el);
+		// The observer fires once per element on observe(), which covers a
+		// panel that just mounted; one that just unmounted needs this nudge.
+		rendererRef.current?.viewportChanged();
+		return () => observer.disconnect();
+	}, [isEmpty, outlineOpen]);
+
 	// Feed #1 — data: positions + edges + clusters + resolved colors. Runs
 	// after the layout effect (same commit, declaration order) and after
 	// the construct effect, so the renderer exists and positions are fresh.
@@ -1660,6 +1682,7 @@ export function GraphView({
 			edge: tokenHex("--ring"),
 			label: tokenHex("--muted-foreground"),
 			hoverText: tokenHex("--foreground"),
+			background: tokenHex("--background"),
 		};
 		// Match the app typography (Geist via the body's stack).
 		const fontFamily = getComputedStyle(document.body).fontFamily;
@@ -1983,7 +2006,7 @@ export function GraphView({
 			    against the full-bleed parent) — the row NEVER wraps (owner
 			    rejected the two-row fold); in narrow windows the search is
 			    the flexible element and shrinks instead. */}
-			<div className="lh-no-drag lh-wco-floating absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
+			<div data-graph-occluder="" className="lh-no-drag lh-wco-floating absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
 			{/* z-20 (2026-09-20): the row paints above the cost number below
 			    it — without this, the later-in-DOM cost control layered over
 			    the settings/coverage dropdowns (owner report), still hoverable

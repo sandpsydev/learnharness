@@ -1509,9 +1509,10 @@ describe("prompt composition", () => {
 		// teacher turn until the numeric-prefix filter stopped it. This guard
 		// catches the sibling failure mode — an accidental dump pasted into a
 		// fragment. Thresholds: largest real fragment is 40-demos.md at ~3.2k
-		// chars; 8k is generous headroom. Composed total ≤ 70k chars (raised from 60k
+		// chars; 8k is generous headroom. Composed total ≤ 72k chars (raised from 60k
 		// for the first-pass, check-set and medical-figure rules, then to 70k for the
-		// real-figure `figure` tool rules, 2026-11).
+		// real-figure `figure` tool rules, then to 72k for the approved teaching-
+		// explanation and figure-request wording (E1–E4, Q1–Q2), 2026-11).
 		//
 		// QA 2026-11-12: this loop used to read src/agent/prompts at the top level
 		// only, where nothing but README.md lives — every fragment is in a role
@@ -1534,7 +1535,7 @@ describe("prompt composition", () => {
 			const limit = OVER_8K[f] ?? 8_000;
 			assert.ok(body.length <= limit, `fragment ${f} is ${body.length} chars — over its ${limit} guard`);
 		}
-		assert.ok(composeInstructions("teacher").length <= 70_000, "composed system prompt over the 70k guard");
+		assert.ok(composeInstructions("teacher").length <= 72_000, "composed system prompt over the 72k guard");
 	});
 });
 

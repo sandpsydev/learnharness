@@ -1512,7 +1512,7 @@ describe("prompt composition", () => {
 		// chars; 8k is generous headroom. Composed total ≤ 72k chars (raised from 60k
 		// for the first-pass, check-set and medical-figure rules, then to 70k for the
 		// real-figure `figure` tool rules, then to 72k for the approved teaching-
-		// explanation and figure-request wording (E1–E4, Q1–Q2), 2026-11).
+		// explanation and figure-request wording (E1–E4, Q1–Q3), 2026-11).
 		//
 		// QA 2026-11-12: this loop used to read src/agent/prompts at the top level
 		// only, where nothing but README.md lives — every fragment is in a role

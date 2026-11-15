@@ -19,7 +19,8 @@
  *                                its topic folder, My notes intact, when it is)
  *   Systems/System - <x>.md      one map of content per organ system
  *   Illness scripts/<x>.md       the Review-mode scripts (illness-script.ts)
- *   Attachments/<file>           images the scripts embed
+ *   Session recaps/<x>.md        one review note per teaching session (session-recap.ts)
+ *   Attachments/<file>           images the scripts and recaps embed
  *
  * Rules the whole module obeys:
  *   - Every note the app writes carries `lh_managed: true`, `lh_kind` and
@@ -41,6 +42,7 @@ export const OBSIDIAN_APP_FOLDER = "LearnHarness";
 export const NODES_DIR = "Nodes";
 export const SYSTEMS_DIR = "Systems";
 export const SCRIPTS_DIR = "Illness scripts";
+export const SESSION_RECAPS_DIR = "Session recaps";
 export const ASSETS_DIR = "Attachments";
 /** Where a removed node's note goes when the learner had written in it. */
 export const SALVAGE_DIR = "Removed nodes";
@@ -116,7 +118,7 @@ export class StemRegistry {
 
 // ─── frontmatter ─────────────────────────────────────────────────────────────
 
-export type NoteKind = "node" | "system" | "script" | "topic";
+export type NoteKind = "node" | "system" | "script" | "topic" | "recap";
 
 const yamlString = (value: string): string => JSON.stringify(value);
 
@@ -166,7 +168,7 @@ export function readManagedHeader(text: string): ManagedHeader | null {
 	if (fields.lh_managed !== "true") return null;
 	const kind = fields.lh_kind;
 	const id = fields.lh_id;
-	if ((kind !== "node" && kind !== "system" && kind !== "script" && kind !== "topic") || !id) return null;
+	if ((kind !== "node" && kind !== "system" && kind !== "script" && kind !== "topic" && kind !== "recap") || !id) return null;
 	return { kind, id };
 }
 
@@ -663,13 +665,13 @@ export function reconcileVault(vault: VaultPort, scan: readonly ScannedNote[], d
 		if (!desiredPaths.has(old.toLowerCase())) vault.remove(old);
 	}
 
-	// Notes the app wrote whose subject is gone. Illness scripts are never removed
-	// this way: there is no "delete script", and rewriting one spends the learner's
-	// ChatGPT allowance, so a script note whose record is momentarily unreadable
-	// must survive.
+	// Notes the app wrote whose subject is gone. Illness scripts and session recaps
+	// are never removed this way: there is no "delete script", and rewriting one
+	// spends the learner's ChatGPT allowance, so a note whose record is momentarily
+	// unreadable (or whose session was deleted: the review note outlives it) must survive.
 	for (const [key, file] of owned) {
 		if (wanted.has(key)) continue;
-		if (file.header?.kind === "script") continue;
+		if (file.header?.kind === "script" || file.header?.kind === "recap") continue;
 		if (desiredPaths.has(file.path.toLowerCase())) continue; // the path is taken by another note now
 		const split = splitMyNotes(file.text);
 		if (split.mine !== null && hasUserNotes(split.mine)) {

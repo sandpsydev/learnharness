@@ -333,6 +333,9 @@ export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
 	// Illness scripts are long, source-checked review text, and the illness
 	// list is a judgment over the whole graph: both want the strong slot.
 	scriptwriter: "strong",
+	// A session recap is review text a learner will study from, written from a
+	// long transcript: it wants the strong slot, like the scriptwriter.
+	recapWriter: "strong",
 };
 
 /** General settings — app-level behavior. Version DISPLAY and plans login

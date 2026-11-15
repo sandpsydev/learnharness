@@ -12,6 +12,7 @@ export * from "./graph-organizer.ts";
 export * from "./placement.ts";
 export * from "./obsidian.ts";
 export * from "./review.ts";
+export * from "./recap.ts";
 export * from "./anki.ts";
 export { NotesImportError } from "../agent/subagents/extraction.ts";
 export * from "./commit-positions.ts";

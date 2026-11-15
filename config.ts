@@ -39,6 +39,9 @@ export const PATHS = {
 	 *  their images, and the illness list — LearnHarness's own copy, from
 	 *  which the Obsidian notes are rendered. */
 	review: path.join(DATA_ROOT, "review"),
+	/** Session recaps (medical fork): one JSON per teaching session and the pictures
+	 *  it embeds — LearnHarness's own copy, from which the Obsidian notes are rendered. */
+	recaps: path.join(DATA_ROOT, "recaps"),
 	/** Local embedding model files (downloaded once, then offline). */
 	models: path.join(DATA_ROOT, "models"),
 	/** Debug artifacts (env-gated): data/debug/provider-events/<chatId>.jsonl
@@ -75,7 +78,9 @@ export type ModelRole =
 	/** Places every fact in the organ system → topic → aspect outline (medical fork). */
 	| "placer"
 	/** Review mode (medical fork): writes illness scripts and lists the illnesses in the graph. */
-	| "scriptwriter";
+	| "scriptwriter"
+	/** Session recap (medical fork): writes one review note from one finished or running session. */
+	| "recapWriter";
 
 /**
  * The LIVE graph store (src/store/graph.ts) — owned by the app's extraction

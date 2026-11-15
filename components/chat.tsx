@@ -33,6 +33,7 @@ import { pendingExpertAnswerNotice, QueuedSteersBody, type QueuedSteerLine } fro
 import { DictationBar, finishDictation, joinDictation, useDictation } from "@/components/dictation";
 import { useFieldCycle } from "@/components/field-cycle";
 import { JobsContext } from "@/components/jobs-context";
+import { SessionRecapButton } from "@/components/session-recap";
 import { StatsBar } from "@/components/stats-bar";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import {
@@ -1373,6 +1374,9 @@ export function Chat({
 						</button>
 </Hint>
 					)}
+					{/* Session recap (medical fork): one review note for this session in
+					    Obsidian, on click only. Teaching sessions, every width. */}
+					{kind !== "practice" && <SessionRecapButton chatId={chatId} />}
 					{/* The extraction ring (owner-locked redesign, 2026-09-24): fills
 					    with uncovered vs the chunk threshold, pulses while a run is in
 					    flight, vanishes when the graph is off. Click → the exact

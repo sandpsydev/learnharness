@@ -35,6 +35,7 @@ import type {
 	VerifyItem,
 	VerifyStatus,
 	IllnessScript,
+	SessionRecap,
 	IllnessCatalogue,
 } from "./contracts.ts";
 import type { UserSettings } from "./settings.ts";
@@ -328,6 +329,19 @@ export interface ReviewStore {
 	assetSize(file: string): number | null;
 	readCatalogue(): IllnessCatalogue | null;
 	writeCatalogue(catalogue: IllnessCatalogue): void;
+}
+
+// ─── RecapStore — session recaps and the pictures they embed (data/recaps) ───
+
+export interface RecapStore {
+	/** Every recap, newest first. */
+	list(): SessionRecap[];
+	get(chatId: string): SessionRecap | null;
+	/** Save a recap with the image files it embeds (file name → bytes), replacing any earlier version. */
+	put(recap: SessionRecap, assets: ReadonlyArray<{ file: string; bytes: Uint8Array }>): void;
+	/** An image file's bytes, or null when absent. */
+	readAsset(file: string): Uint8Array | null;
+	assetSize(file: string): number | null;
 }
 
 // ─── PlacementStore — where each fact sits in the outline (data/graph/placements.jsonl) ───

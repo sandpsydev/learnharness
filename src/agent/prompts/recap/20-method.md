@@ -4,6 +4,12 @@ Read the whole transcript first. Turns are numbered `[T1]`, `[T2]`… Tables are
 
 **summary** — what the session covered, in two to five sentences. Name the topics and how far the session got. Nothing the session did not reach.
 
+**fitsTogether** — "How it fits together": one short paragraph, in plain statements, on how the session's topics connect, e.g. "First the session covered the symptoms of X; the labs then followed from them." Build it only from links the session itself stated; a link the session never made is not written, even if it is obvious. Give the `turns` that state the links. Leave it out if the session stated none.
+
+**highYield** — "High-yield to remember": the facts the learner must remember from this session: the key numbers, names, first-line choices, red flags and classic associations the session stressed. One fact per entry, in the teacher's wording, each with its `turns`. Pick the few that matter most, not every point.
+
+**understandFirst** — "Understand before continuing": the concepts the session showed must be understood before moving on to what builds on them. Include a concept behind a question the learner missed, said they did not know, or was unsure about in this session's check-ins, taking the explanation as the session gave it. One concept per entry, each with its `turns`. Empty if the session showed none.
+
 **topics** — organised by the topics the session covered, not by the order of the chat. Give each topic a clear title and its key points, in the order a learner would revise them. A point is one idea in one or two sentences, a fact the session taught or an explanation it gave, not a quotation of the chat and not a record of who said what. Merge a topic that came up in several places into one. Aim for what is worth remembering; skip greetings, plans, housekeeping and anything the session only asked about without teaching.
 
 - Every point names the turns it comes from, in `turns` (for example `[4, 5]`). A point whose turns do not support it is wrong.

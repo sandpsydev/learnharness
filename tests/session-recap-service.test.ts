@@ -141,6 +141,9 @@ function setup(opts: Options = {}) {
 			const checked = validateRecap(
 				{
 					summary: `Loop diuretics, written ${writes} time(s).`,
+					fitsTogether: { text: "Loop diuretics act on NKCC2.", turns: [2] },
+					highYield: [{ text: "Furosemide blocks NKCC2.", turns: [2] }],
+					understandFirst: [{ text: "Why NCC is the wrong transporter.", turns: [3] }],
 					topics: [
 						{
 							title: "Loop diuretics",
@@ -190,6 +193,9 @@ describe("Session recap — writing one", () => {
 		const text = fs.readFileSync(t.notePath(NOTE), "utf-8");
 		assert.match(text, /^---\nlh_managed: true\nlh_kind: "recap"\nlh_id: "chat_abc123_def45678"\ndate: "2026-11-10"\nsession: "Loop diuretics"/);
 		assert.match(text, /tags:\n {2}- session-recap\n {2}- system\/renal/);
+		assert.match(text, /## How it fits together\n\nLoop diuretics act on NKCC2\./);
+		assert.match(text, /## High-yield to remember\n\n- Furosemide blocks NKCC2\./);
+		assert.match(text, /## Understand before continuing\n\n- Why NCC is the wrong transporter\./);
 		assert.match(text, /\| Furosemide \| Blocks NKCC2/);
 		assert.match(text, /## Fact notes from this session\n\n- \[\[Furosemide blocks NKCC2\]\]/);
 		assert.ok(!text.includes("Insulin binds"), "a fact from another session is not linked");

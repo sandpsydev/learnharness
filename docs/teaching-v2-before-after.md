@@ -12,6 +12,15 @@ The owner approved the PR with these decisions; all are in this version.
 4. **Prompt size kept.** The composed teacher prompt is now about 67.8k characters (guard 68k).
 5. **Classification grids** added to the figure rules as a preferred figure when a topic has two natural axes (the owner's surgical-jaundice example: lesion in the lumen / in the wall / outside the duct, crossed with the level of the biliary tree).
 
+## Later owner decisions (2026-11-18)
+
+Wording changes to the teacher prompt after a "lessons feel disconnected, and slow" review. The check set itself (question count, order, one question per turn, the "Check your understanding" button) is **unchanged**; the owner declined a hard-first, one-turn version.
+
+- `teacher/20-teaching.md`, item 3: "The connection carries itself … don't announce the choreography" is replaced by "Say where the lesson is": one plain summary sentence at each step (what was just covered, what comes next), plain topic headings, no "X does not establish…, Y does" contrasts for common-sense points.
+- `teacher/60-medical-edge.md`: after the last answer the teacher reacts in one or two sentences and carries straight on into the next step in the same turn (it still stops for the plan go-ahead, a section end, a missed question, a learner choice, or a figure/lookup still loading); look-alikes go in the same comparison table as the earlier one; each plan section closes with a 2-4 line plain summary.
+- The Session recap gains How it fits together, High-yield to remember and Understand before continuing (see `docs/medical-spec.md`).
+- Composed teacher prompt: about 70.9k → 71.8k characters (the 72k guard in `tests/jobs.test.ts` is unchanged).
+
 ## What changed, in plain English
 
 | Your point | What the tutor now does |

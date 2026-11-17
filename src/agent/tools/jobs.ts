@@ -137,8 +137,8 @@ const PDF_DESCRIPTION =
 
 const FIGURE_DESCRIPTION =
 	"Dispatch a background agent that finds a REAL figure for the lesson — anatomy, imaging, histology, a clinical photograph, an ECG — " +
-	"looking first in the learner's own lecture slides, then Radiopaedia, then trusted open atlases and open-access articles. " +
-	"It returns the picture with its credit and licence, or links with a one-line note when no image can be shown. It never draws. " +
+	"looking first in the learner's own lecture slides, then Radiopaedia, then trusted open atlases, open-access articles and high-tier journals. " +
+	"It returns the picture with its credit (and its licence, when one is stated), or links with a one-line note when no image can be shown. It never draws. " +
 	"The call is ASYNC and fire-and-forget — it resolves immediately and your turn continues; the result arrives later as a new message.";
 
 /**

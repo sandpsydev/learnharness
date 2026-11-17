@@ -172,7 +172,7 @@ describe("Wikimedia Commons", () => {
 		assert.equal(first!.description, "Apical pneumothorax on CT and chest X-ray & a left first rib fracture");
 		assert.equal(first!.pageUrl, "https://commons.wikimedia.org/wiki/File:Apical_pneumothorax_shown_on_CT_and_chest_X-ray.png");
 		assert.ok(figureImageAllowed(figureSourceById("commons")!, first!.imageUrl!));
-		assert.equal(second!.licence, null, "fair use is not a reusable licence: link only");
+		assert.equal(second!.licence, null, "fair use is not a reusable licence: nothing to put in the credit line, and no gate either");
 	});
 
 	it("searches through the guarded fetch", async () => {
@@ -261,22 +261,30 @@ describe("atlas and case pages", () => {
 		assert.ok(page.images.every((i) => i.licence?.label === "CC BY-NC-ND 3.0"));
 	});
 
-	it("a page that states no licence yields pictures with none: link only", () => {
+	it("a page that states no licence still yields its pictures, with no licence for the credit line", () => {
 		const page = parsePageImages(fixture("atlas-page-nolicence.html"), "https://librepathology.org/wiki/Pemphigus", figureSourceById("librepathology")!);
 		assert.equal(page.licence, null);
 		assert.ok(page.images.length >= 1 && page.images.every((i) => i.licence === null));
 	});
 
-	it("never opens a journal or PathologyOutlines page", async () => {
+	it("opens a journal page like any listed site, lists its own pictures, and still never contacts an unlisted site", async () => {
 		const log: string[] = [];
-		const f = fakeFetch({}, log);
-		for (const url of ["https://www.nejm.org/doi/full/10.1056/NEJMicm1", "https://www.pathologyoutlines.com/topic/x.html"]) {
-			const out = await readFigurePage(url, { fetchImpl: f });
-			assert.ok(!out.ok && out.reason === "disallowed", url);
-		}
+		const PAGE = "https://www.nejm.org/doi/full/10.1056/NEJMicm1";
+		const f = fakeFetch({ [PAGE]: new Response(fixture("journal-page.html"), { status: 200, headers: { "content-type": "text/html" } }) }, log);
+		const out = await readFigurePage(PAGE, { fetchImpl: f });
+		assert.ok(out.ok);
+		assert.equal(out.page.title, "Spontaneous Pneumothorax");
+		assert.equal(out.page.licence, null, "an all-rights-reserved footer reads as no licence; the picture is listed anyway");
+		assert.ok(out.page.images.length >= 1 && out.page.images.every((i) => i.sourceId === "journal" && i.tier === "journal" && i.licence === null && i.pageUrl === PAGE));
 		const off = await readFigurePage("https://example.com/", { fetchImpl: f });
 		assert.ok(!off.ok && off.reason === "disallowed");
-		assert.deepEqual(log, []);
+		assert.deepEqual(log, [PAGE], "only the listed journal was contacted");
+	});
+
+	it("a journal that refuses the automated read falls back to a link", async () => {
+		const PAGE = "https://www.nejm.org/doi/full/10.1056/NEJMicm1";
+		const out = await readFigurePage(PAGE, { fetchImpl: fakeFetch({ [PAGE]: new Response("", { status: 403 }) }) });
+		assert.ok(!out.ok && out.reason === "blocked");
 	});
 
 	it("a blocked case page (Radiopaedia answers 406 to automated reads) falls back to a link", async () => {

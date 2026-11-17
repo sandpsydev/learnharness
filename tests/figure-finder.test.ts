@@ -3,10 +3,11 @@
  * model, a fake network, a fake library and a fake page renderer. No live fetching.
  *
  * What is pinned: the order the sources are tried, that a picture is shown only
- * after it was looked at AND carries a reusable licence AND the model is
- * confident; that anything else becomes a link; that a URL can only be one a tool
- * returned; that journals are never fetched; that a picture is fetched once per
- * session; and that a blocked site degrades to a link.
+ * after it was looked at AND the model is confident; that its licence plays no
+ * part (owner decision 2026-11-18: a picture with no licence, and a journal
+ * picture, are shown, each with a credit line); that a doubtful match or a blocked
+ * download becomes a link; that a URL can only be one a tool returned; that a
+ * picture is fetched once per session.
  */
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -271,7 +272,7 @@ describe("open sources", () => {
 		assert.match(result.brief, /Do not draw it/);
 	});
 
-	it("a picture with no reusable licence is linked even when the model is sure of it", async () => {
+	it("a picture with no licence on record is shown after a confident look, with a credit line and no licence text", async () => {
 		const log: string[] = [];
 		const e = env({
 			cacheRoot: newRoot(),
@@ -291,8 +292,62 @@ describe("open sources", () => {
 			],
 			e,
 		);
+		assert.equal(result.outcome, "image");
+		assert.equal(result.image?.licence, "", "no licence was read, and none is invented");
+		assert.equal(result.image?.licenceUrl, undefined);
+		assert.ok(result.image!.credit.endsWith("via Wikimedia Commons"), `credit line kept: ${result.image!.credit}`);
+		assert.equal(result.image?.sourceUrl, "https://commons.wikimedia.org/wiki/File:Pneumothorax_unfree.jpg", "the page is named so the original can be found");
+		assert.doesNotMatch(result.brief, /licen[cs]e|link only/i);
+		assert.match(result.brief, /credit and source link are printed on the card/);
+	});
+
+	it("a picture with no licence is still a link when the model is not confident of the match", async () => {
+		const log: string[] = [];
+		const e = env({
+			cacheRoot: newRoot(),
+			fetchImpl: network(
+				{
+					[COMMONS_API]: COMMONS,
+					"https://upload.wikimedia.org/wikipedia/commons/thumb/b/b2/Pneumothorax_unfree.jpg/1000px-Pneumothorax_unfree.jpg": COMMONS_IMAGE,
+				},
+				log,
+			),
+		});
+		const result = await run(
+			[
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { id: "c2" }]],
+				[["show_image", { id: "c2", shows: "Maybe a pneumothorax.", key_feature: "the line", confident: false }]],
+			],
+			e,
+		);
 		assert.equal(result.outcome, "link");
-		assert.match(result.brief, /no reusable licence/);
+		assert.equal(result.image, undefined);
+		assert.equal(result.links[0]?.url, "https://commons.wikimedia.org/wiki/File:Pneumothorax_unfree.jpg", "the credit's page is still given");
+		assert.match(result.brief, /not confident/);
+	});
+
+	it("a download the site blocks becomes a link with the page, not a picture", async () => {
+		const log: string[] = [];
+		const e = env({
+			cacheRoot: newRoot(),
+			fetchImpl: network({ [COMMONS_API]: COMMONS, [COMMONS_IMG]: () => new Response("", { status: 403 }) }, log),
+		});
+		const result = await run(
+			[
+				[["commons_search", { query: "pneumothorax" }]],
+				[["look", { id: "c1" }]],
+				[["show_image", { id: "c1", shows: "Pneumothorax.", key_feature: "the line", confident: true }]],
+				[["give_links", { links: [{ id: "c1", note: "Look at the apex." }], reason: "the site blocks downloads" }]],
+			],
+			e,
+		);
+		assert.equal(result.outcome, "link", "never seen, so never shown");
+		assert.equal(result.image, undefined);
+		assert.equal(result.links[0]?.url, "https://commons.wikimedia.org/wiki/File:Apical_pneumothorax_shown_on_CT_and_chest_X-ray.png");
+		assert.equal(result.links[0]?.source, "Wikimedia Commons");
+		assert.match(result.links[0]!.note, /Look at the apex/);
+		assert.match(result.brief, /blocks downloads/);
 	});
 
 	it("will not show a picture it has not looked at", async () => {
@@ -421,12 +476,45 @@ describe("links: journals, blocked sites, and ids", () => {
 		},
 	});
 
-	it("a journal is linked with a one-line note, and never fetched", async () => {
+	it("a journal picture is shown like any other, with its credit line (no licence read)", async () => {
 		const log: string[] = [];
 		const seen: string[] = [];
+		const PAGE = "https://www.nejm.org/doi/full/10.1056/NEJMicm1";
+		const IMG = "https://www.nejm.org/na101/home/literatum/publisher/mms/journals/content/nejm/2026/nejm_2026.395.issue-1/nejmicm1/20260101/images/img_xlarge/nejmicm1_f1.jpeg";
 		const e = env({
 			cacheRoot: newRoot(),
-			fetchImpl: network({}, log),
+			fetchImpl: network({ [PAGE]: () => ok(fixture("journal-page.html"), "text/html"), [IMG]: COMMONS_IMAGE }, log),
+			search: provider(
+				[{ title: "Spontaneous Pneumothorax", url: PAGE, snippet: "Images in Clinical Medicine" }],
+				seen,
+			),
+		});
+		const result = await run(
+			[
+				[["site_search", { source: "journal", query: "pneumothorax" }]],
+				[["page_images", { id: "c1" }]],
+				[["look", { id: "c2" }]],
+				[["show_image", { id: "c2", shows: "A chest film with a left apical pleural line.", key_feature: "the thin line at the apex", confident: true }]],
+			],
+			e,
+		);
+		assert.equal(result.outcome, "image");
+		assert.equal(result.image?.source, "High-tier journal");
+		assert.equal(result.image?.tier, "journal");
+		assert.equal(result.image?.licence, "", "the page states no reusable licence, and the picture is shown anyway");
+		assert.equal(result.image?.credit, "Spontaneous Pneumothorax, via High-tier journal");
+		assert.equal(result.image?.sourceUrl, PAGE);
+		assert.deepEqual(log, [PAGE, IMG]);
+		assert.match(seen[0]!, /site:nejm\.org/);
+	});
+
+	it("a journal that blocks the page read is linked with a one-line note", async () => {
+		const log: string[] = [];
+		const seen: string[] = [];
+		const PAGE = "https://www.nejm.org/doi/full/10.1056/NEJMicm1";
+		const e = env({
+			cacheRoot: newRoot(),
+			fetchImpl: network({ [PAGE]: () => new Response("", { status: 403 }) }, log),
 			search: provider(
 				[
 					{ title: "Spontaneous Pneumothorax", url: "https://www.nejm.org/doi/full/10.1056/NEJMicm1", snippet: "Images in Clinical Medicine" },
@@ -439,7 +527,7 @@ describe("links: journals, blocked sites, and ids", () => {
 			[
 				[["site_search", { source: "journal", query: "pneumothorax" }]],
 				[["page_images", { id: "c1" }]],
-				[["give_links", { links: [{ id: "c1", note: "The chest film in the first panel shows the pleural line." }], reason: "journal figures are copyrighted" }]],
+				[["give_links", { links: [{ id: "c1", note: "The chest film in the first panel shows the pleural line." }], reason: "the journal blocks automated reads" }]],
 			],
 			e,
 		);
@@ -447,7 +535,7 @@ describe("links: journals, blocked sites, and ids", () => {
 		assert.deepEqual(result.links, [
 			{ title: "Spontaneous Pneumothorax", url: "https://www.nejm.org/doi/full/10.1056/NEJMicm1", source: "High-tier journal", note: "The chest film in the first panel shows the pleural line." },
 		]);
-		assert.deepEqual(log, [], "no network call at all for a journal");
+		assert.deepEqual(log, [PAGE], "one polite attempt, then the link");
 		assert.match(seen[0]!, /site:nejm\.org/);
 		assert.match(result.brief, /Do not draw it/);
 	});

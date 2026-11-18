@@ -47,6 +47,18 @@ const turnsSchema = Type.Array(Type.Integer({ minimum: 1 }), { description: "The
 
 const recapSchema = Type.Object({
 	summary: Type.String({ minLength: 1, description: "Two to five sentences: what the session covered." }),
+	fitsTogether: Type.Optional(
+		Type.Object(
+			{ text: Type.String({ minLength: 1, description: "A short paragraph on how the session's topics connect, using only links the session stated." }), turns: turnsSchema },
+			{ description: "How it fits together. Leave out when the session stated no links." },
+		),
+	),
+	highYield: Type.Optional(
+		Type.Array(Type.Object({ text: Type.String({ minLength: 1, description: "One must-remember fact, one or two sentences." }), turns: turnsSchema }), { description: "High-yield to remember." }),
+	),
+	understandFirst: Type.Optional(
+		Type.Array(Type.Object({ text: Type.String({ minLength: 1, description: "One concept to understand before moving on, one or two sentences." }), turns: turnsSchema }), { description: "Understand before continuing." }),
+	),
 	topics: Type.Array(
 		Type.Object({
 			title: Type.String({ minLength: 1 }),
@@ -123,7 +135,7 @@ export async function runRecapWriter(input: RecapWriterInput): Promise<RecapWrit
 		role: "recapWriter",
 		toolName: SUBMIT_RECAP_TOOL,
 		toolDescription:
-			"Submit the finished recap: the summary, the topics with their points (each naming its turns), the misses and the self-test. It is checked against the session; if anything is refused you get the reasons and must fix and submit again.",
+			"Submit the finished recap: the summary, how it fits together, the high-yield and understand-first lists, the topics with their points (each naming its turns), the misses and the self-test. It is checked against the session; if anything is refused you get the reasons and must fix and submit again.",
 		parameters: recapSchema,
 		fill: (raw) => raw as RawRecapDraft,
 		systemPrompt: recapWriterInstructions(),
@@ -131,7 +143,7 @@ export async function runRecapWriter(input: RecapWriterInput): Promise<RecapWrit
 		engine: input.engine,
 		signal: input.signal,
 		maxTurns: RECAP_WRITER_MAX_TURNS,
-		prepareArguments: (args) => healStringifiedArrays(args, ["topics", "misses", "selfTest"]),
+		prepareArguments: (args) => healStringifiedArrays(args, ["topics", "misses", "selfTest", "highYield", "understandFirst"]),
 		validate: (value) => {
 			const result = validateRecap(value, input.transcript);
 			if (!result.ok) return result.problems.map((p, i) => `${i + 1}. ${p}`).join("\n");

@@ -131,6 +131,9 @@ describe("validateRecap — nothing the session didn't have", () => {
 	const t = assemble();
 	const good = () => ({
 		summary: "Loop diuretics and where they act.",
+		fitsTogether: { text: "Loop diuretics act on NKCC2, which is why they cause a large diuresis.", turns: [2, 3] },
+		highYield: [{ text: "Furosemide blocks NKCC2.", turns: [2] }],
+		understandFirst: [{ text: "Why NCC is the wrong transporter for a loop diuretic.", turns: [3, 4] }],
 		topics: [{ title: "Loop diuretics", points: [{ text: "They block NKCC2 in the thick ascending limb.", turns: [2] }], tables: ["K1"], figures: ["F1", { id: "F2", caption: "The nephron" }] }],
 		misses: [{ question: "Which transporter does furosemide block?", yours: "NCC", correct: "NKCC2", turns: [3, 4] }],
 		selfTest: [{ question: "Which transporter does furosemide block?", answer: "NKCC2", turns: [3] }],
@@ -146,6 +149,31 @@ describe("validateRecap — nothing the session didn't have", () => {
 		assert.equal(topic.figures[0]!.credit, "Dr Example, via Radiopaedia · CC BY-NC-SA 3.0");
 		assert.equal(topic.figures[1]!.caption, "The nephron");
 		assert.equal(topic.figures[1]!.credit, "");
+		assert.equal(r.recap.fitsTogether, "Loop diuretics act on NKCC2, which is why they cause a large diuresis.");
+		assert.deepEqual(r.recap.highYield, ["Furosemide blocks NKCC2."]);
+		assert.deepEqual(r.recap.understandFirst, ["Why NCC is the wrong transporter for a loop diuretic."]);
+	});
+
+	it("refuses how-it-fits, high-yield and understand-first parts that name no turn or a turn not in the session; all three may be left out", () => {
+		const bad = good() as Record<string, unknown>;
+		bad.fitsTogether = { text: "A link nobody made.", turns: [] };
+		bad.highYield = [{ text: "A fact.", turns: [99] }, { text: "", turns: [2] }];
+		bad.understandFirst = [{ text: "A concept.", turns: [] }];
+		const r = validateRecap(bad, t);
+		assert.ok(!r.ok);
+		if (r.ok) return;
+		const all = r.problems.join("\n");
+		assert.match(all, /fitsTogether: name the turn numbers/);
+		assert.match(all, /highYield\[0\].*turn 99 is not in the session/);
+		assert.match(all, /highYield\[1\]: empty text/);
+		assert.match(all, /understandFirst\[0\]: name the turn numbers/);
+		const bare = good() as Record<string, unknown>;
+		delete bare.fitsTogether;
+		delete bare.highYield;
+		delete bare.understandFirst;
+		const ok = validateRecap(bare, t);
+		assert.ok(ok.ok);
+		if (ok.ok) assert.deepEqual([ok.recap.fitsTogether, ok.recap.highYield, ok.recap.understandFirst], ["", [], []]);
 	});
 
 	it("refuses a point that names no turn, or a turn that is not in the session", () => {
@@ -235,6 +263,9 @@ describe("renderRecapNote", () => {
 		const r = validateRecap(
 			{
 				summary: "Loop diuretics and where they act.",
+				fitsTogether: { text: "Loop diuretics act on NKCC2, so they cause a large diuresis.", turns: [2] },
+				highYield: [{ text: "Furosemide blocks NKCC2.", turns: [2] }],
+				understandFirst: [{ text: "Why NCC is the wrong transporter.", turns: [3] }],
 				topics: [{ title: "Loop diuretics", points: [{ text: "They block NKCC2.", turns: [2] }], tables: ["K1"], figures: ["F1"] }],
 				misses: [{ question: "Which transporter does furosemide block?", yours: "NCC", correct: "NKCC2", turns: [3] }],
 				selfTest: [{ question: "Which transporter does furosemide block?", answer: "NKCC2\nin the thick ascending limb", turns: [3] }],
@@ -258,6 +289,7 @@ describe("renderRecapNote", () => {
 	it("has a summary, the topic with its points, the table as written, the figure with its credit, the misses and a self-test with hidden answers", () => {
 		const text = renderRecapNote(recap(), { facts: [], systems: [] }).content;
 		assert.match(text, /## Summary\n\nLoop diuretics and where they act\./);
+		assert.match(text, /## Summary\n\nLoop diuretics and where they act\.\n\n## How it fits together\n\nLoop diuretics act on NKCC2, so they cause a large diuresis\.\n\n## High-yield to remember\n\n- Furosemide blocks NKCC2\.\n\n## Understand before continuing\n\n- Why NCC is the wrong transporter\.\n\n## Loop diuretics/);
 		assert.match(text, /## Loop diuretics\n\n- They block NKCC2\./);
 		assert.ok(text.includes(TABLE));
 		assert.match(text, new RegExp(`!\\[\\[recap-[a-z0-9]+-${FIGURE_FILE.replace(".", "\\.")}\\|560\\]\\]\\n\\*Left pneumothorax on an erect chest X-ray\\. — Dr Example, via Radiopaedia · CC BY-NC-SA 3\\.0\\*`));
@@ -276,8 +308,12 @@ describe("renderRecapNote", () => {
 		const r = recap();
 		r.misses = [];
 		r.selfTest = [];
+		delete r.fitsTogether;
+		r.highYield = [];
+		delete r.understandFirst;
 		const text = renderRecapNote(r, { facts: [], systems: [] }).content;
 		assert.ok(!text.includes("Where you went wrong") && !text.includes("Self-test"));
+		assert.ok(!text.includes("How it fits together") && !text.includes("High-yield") && !text.includes("Understand before continuing"));
 		assert.ok(!text.includes(MY_NOTES_MARKER));
 	});
 });

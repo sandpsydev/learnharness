@@ -30,6 +30,19 @@ describe("teaching v2 prompt rules", () => {
 		assert.equal(teacher.includes("One step, one check."), false);
 	});
 
+	it("each step opens with a plain summary sentence, look-alikes share one table, the teacher keeps going after the last answer, sections close with a short summary (2026-11-18)", () => {
+		for (const text of [
+			"Say where the lesson is",
+			"never an abstract framing",
+			"contrast only two things the learner would truly confuse",
+			"Look-alikes and sibling conditions, tests or drugs go in one table",
+			"Keep going after the last answer",
+			"carry straight on into the next step in the same turn",
+			"2-4 line plain summary",
+		]) assert.ok(teacher.includes(text), text);
+		assert.equal(teacher.includes("don't announce the choreography"), false);
+	});
+
 	it("a prediction stays one question per turn and never joins a set", () => {
 		assert.ok(teacher.includes("A prediction is one question in its own turn"));
 	});

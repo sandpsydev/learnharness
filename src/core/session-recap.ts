@@ -13,7 +13,8 @@
  *                       graph, not the library, not the Expert AI answers.
  *                       Every part carries a turn number [T12]; tables and
  *                       figures carry ids (K1, F1).
- *   validateRecap       refuses a draft whose points do not name turns of this
+ *   validateRecap       refuses a draft whose points (and its how-it-fits, high-yield
+ *                       and understand-first parts) do not name turns of this
  *                       session, or that names a table or figure the session
  *                       never showed. Tables and figures are copied from the
  *                       record by id, never retyped by the writer, so they
@@ -43,6 +44,9 @@ export const RECAP_LIMITS = {
 	pointsPerTopic: 24,
 	misses: 30,
 	selfTest: 40,
+	fitsTogetherChars: 1_500,
+	highYield: 20,
+	understandFirst: 15,
 	textChars: 1_200,
 	/** New pictures the app may look for in one recap. */
 	pictures: 5,
@@ -254,6 +258,9 @@ export const transcriptTooLong = (t: Pick<AssembledTranscript, "text">): boolean
 
 export interface RawRecapDraft {
 	summary?: unknown;
+	fitsTogether?: unknown;
+	highYield?: unknown;
+	understandFirst?: unknown;
 	topics?: unknown;
 	misses?: unknown;
 	selfTest?: unknown;
@@ -266,6 +273,10 @@ export interface ValidatedTopic extends RecapTopic {
 
 export interface ValidatedRecap {
 	summary: string;
+	/** Empty when the session stated no links to join up. */
+	fitsTogether: string;
+	highYield: string[];
+	understandFirst: string[];
 	topics: ValidatedTopic[];
 	misses: RecapMiss[];
 	selfTest: RecapQuestion[];
@@ -298,6 +309,32 @@ export function validateRecap(raw: RawRecapDraft, transcript: Pick<AssembledTran
 	const summary = block(raw.summary);
 	if (summary === "") problems.push("summary: write a short summary of what the session covered.");
 	else if (summary.length > RECAP_LIMITS.summaryChars) problems.push(`summary: keep it under ${RECAP_LIMITS.summaryChars} characters.`);
+
+	// The three review parts get the same check as a point: each names turns of this session.
+	let fitsTogether = "";
+	if (raw.fitsTogether !== undefined && raw.fitsTogether !== null) {
+		const entry = isRecord(raw.fitsTogether) ? raw.fitsTogether : { text: raw.fitsTogether, turns: [] };
+		const text = block(entry.text);
+		if (text.length > RECAP_LIMITS.fitsTogetherChars) problems.push(`fitsTogether: keep it under ${RECAP_LIMITS.fitsTogetherChars} characters.`);
+		else if (text !== "" && turnsOk(entry.turns, "fitsTogether")) fitsTogether = text;
+	}
+	const reviewList = (value: unknown, where: "highYield" | "understandFirst"): string[] => {
+		const out: string[] = [];
+		const entries = list(value);
+		const max = RECAP_LIMITS[where];
+		if (entries.length > max) problems.push(`${where}: at most ${max}; keep the ones that matter most.`);
+		entries.slice(0, max).forEach((entry, i) => {
+			const at = `${where}[${i}]`;
+			if (!isRecord(entry)) return void problems.push(`${at}: must be an object with text and turns.`);
+			const text = str(entry.text);
+			if (text === "") problems.push(`${at}: empty text.`);
+			else if (text.length > RECAP_LIMITS.textChars) problems.push(`${at}: too long; split it into shorter points.`);
+			if (turnsOk(entry.turns, at) && text !== "") out.push(text);
+		});
+		return out;
+	};
+	const highYield = reviewList(raw.highYield, "highYield");
+	const understandFirst = reviewList(raw.understandFirst, "understandFirst");
 
 	const topics: ValidatedTopic[] = [];
 	let pictureCount = 0;
@@ -396,7 +433,7 @@ export function validateRecap(raw: RawRecapDraft, transcript: Pick<AssembledTran
 	});
 
 	if (problems.length > 0) return { ok: false, problems };
-	return { ok: true, recap: { summary, topics, misses, selfTest } };
+	return { ok: true, recap: { summary, fitsTogether, highYield, understandFirst, topics, misses, selfTest } };
 }
 
 // ─── naming ──────────────────────────────────────────────────────────────────
@@ -445,6 +482,9 @@ export function renderRecapNote(recap: SessionRecap, ctx: RecapRenderContext): D
 		recap.summary,
 		"",
 	];
+	if (recap.fitsTogether) lines.push("## How it fits together", "", recap.fitsTogether, "");
+	if (recap.highYield && recap.highYield.length > 0) lines.push("## High-yield to remember", "", ...recap.highYield.map((p) => `- ${p}`), "");
+	if (recap.understandFirst && recap.understandFirst.length > 0) lines.push("## Understand before continuing", "", ...recap.understandFirst.map((p) => `- ${p}`), "");
 	for (const topic of recap.topics) {
 		lines.push(`## ${oneLine(topic.title)}`, "");
 		for (const point of topic.points) lines.push(`- ${point}`);

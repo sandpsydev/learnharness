@@ -67,6 +67,12 @@ export interface SessionRecap {
 	/** How many messages the session had when this was written (to tell the learner it has moved on since). */
 	messageCount: number;
 	summary: string;
+	/** "How it fits together": a short paragraph built only from links the session stated. Absent in recaps written before it existed, or when the session stated none. */
+	fitsTogether?: string;
+	/** "High-yield to remember": the must-remember facts of the session. */
+	highYield?: string[];
+	/** "Understand before continuing": concepts the session showed must be understood first, including what the learner missed or was unsure about. */
+	understandFirst?: string[];
 	topics: RecapTopic[];
 	misses: RecapMiss[];
 	selfTest: RecapQuestion[];

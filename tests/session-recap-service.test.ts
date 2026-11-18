@@ -292,6 +292,13 @@ describe("Session recap — pictures for the visual points", () => {
 		assert.equal(t.recapStore.get(CHAT_ID)!.topics[0]!.figures.length, 3, "the session's two figures and the found one");
 	});
 
+	it("a picture the finder found with no licence is credited by its source alone, with no empty licence", async () => {
+		const t = setup({ pictures: [stone], finder: () => finderImage("aaaa3333aaaa3333aaaa3333.png", { tier: "journal", source: "High-tier journal", credit: "Spontaneous Pneumothorax, via High-tier journal", licence: "" }) });
+		t.service.write(CHAT_ID);
+		await t.service.idle();
+		assert.match(fs.readFileSync(t.notePath(NOTE), "utf-8"), /\*Calcium oxalate stones are hard, spiculated and brown\. — Spontaneous Pneumothorax, via High-tier journal\*/);
+	});
+
 	it("credits the learner's own slide by its lecture and slide", async () => {
 		const t = setup({ pictures: [stone], finder: () => finderImage("aaaa2222aaaa2222aaaa2222.png", { tier: "slides", title: "Renal lecture, slide 12", credit: "Your lecture slides", licence: "Your lecture slides" }) });
 		t.service.write(CHAT_ID);

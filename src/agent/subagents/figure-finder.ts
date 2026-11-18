@@ -35,15 +35,16 @@ import { runSubagent } from "./pi-run.ts";
  * The figure finder (medical fork): a background sub-agent that finds a REAL
  * picture for the lesson, in this order — the learner's own lecture slides,
  * Radiopaedia, trusted open atlases and open-access articles, and last a link
- * to a high-tier journal (NEJM and peers), which is copyrighted and never
- * embedded. It looks at each candidate before it vouches for it, and it never
- * draws.
+ * to a high-tier journal (NEJM and peers). It looks at each candidate before
+ * it vouches for it, and it never draws.
  *
  * The model does the judging (does this picture show the concept?). Code owns
  * every rule that must hold whatever the model says: only listed sites are
  * contacted, a URL can only be one a tool returned, an image is shown only
- * when a reusable licence was read for it and the finder has looked at it, and
- * a doubtful match becomes a link.
+ * after the finder has looked at it and is confident, and a doubtful match
+ * becomes a link. Its licence plays no part (owner decision 2026-11-18,
+ * personal study): a licence that was read goes in the credit line, and the
+ * credit line is always kept.
  */
 
 export interface FigureFinderEnv {
@@ -81,18 +82,18 @@ const INSTRUCTIONS = `You are a figure finder for a medical teaching app. The tu
 Look in this order and stop when a picture is good:
 1. The learner's own lecture slides (slides_search). They are the learner's material; always try them first.
 2. Radiopaedia — only when the concept is imaging (X-ray, CT, MRI, ultrasound, angiography). Use site_search with source "radiopaedia". Its case pages usually block automated reads: if page_images says so, give the link instead.
-3. Trusted open sources: commons_search (anatomy drawings, histology, clinical photographs, ECGs; each file has its own licence), europepmc_search then europepmc_figures (open-access journal figures), and specialty atlases through site_search: dermnet (skin), litfl (ECG, emergency), eyerounds and eyewiki (eye), librepathology (histology). Open an atlas page with page_images.
-4. A high-tier journal (NEJM "Images in Clinical Medicine", Lancet, JAMA, BMJ) through site_search with source "journal". These are copyrighted: they can only be linked, never shown.
+3. Trusted open sources: commons_search (anatomy drawings, histology, clinical photographs, ECGs), europepmc_search then europepmc_figures (open-access journal figures), and specialty atlases through site_search: dermnet (skin), litfl (ECG, emergency), eyerounds and eyewiki (eye), librepathology (histology). Open an atlas page with page_images.
+4. A high-tier journal (NEJM "Images in Clinical Medicine", Lancet, JAMA, BMJ) through site_search with source "journal". Open its page with page_images like any other page; if the journal blocks the read, give the link.
 
 Rules:
 - You may only use ids that a tool gave you. Never write a URL yourself.
 - Save steps: call independent searches together in one turn (for example slides_search and commons_search at once), and look at up to four candidates in one look call to compare them side by side.
 - look before you show an image: the picture itself must show the concept. A matching title is not enough. Check the thing the tutor named (the side, the sign, the stain, the view).
-- show_image only when you are confident the picture shows the core of the concept. If you are not sure it does, call give_links with the page instead — a link is better than a wrong picture.
+- show_image only when you are confident the picture shows the core of the concept. If you are not sure it does, call give_links with the page instead — a link is better than a wrong picture. Whether the picture may be reused is not your question; whether it shows the concept is.
 - The tutor's request may list several details (labels, neighbouring structures). A real picture that clearly shows the core of the concept is worth showing even when it lacks some of them: show the best one you looked at and name what it lacks in not_shown. A picture beats a link; the learner's own slide beats an outside picture of the same thing. Do not keep searching for a perfect match.
 - A page of the learner's books often holds one figure among columns of text. Then give crop (top and bottom of the figure with its caption, as fractions of the page height) so the learner sees the figure, not the page. Be generous rather than tight.
 - The caption (shows) says what the picture is in one or two plain sentences. key_feature names the ONE thing to find in it ("the thin white visceral pleural line with no lung markings beyond it"), written so the tutor can point at it. Say only what you can actually see; if a label or the source's description gives the diagnosis, say that it comes from the source.
-- If look says the image cannot be shown (no reusable licence, or the site blocks downloads), the page is still a good link: use give_links, with a one-line note of what to look at on that page.
+- If look says the image cannot be fetched (the site blocks downloads), the page is still a good link: use give_links, with a one-line note of what to look at on that page.
 - give_links takes at most three pages, best first, each with a note of one line: what to look at.
 - If nothing usable turns up after a fair search, call nothing_found. Do not pad.
 - Keep it short: a handful of searches, not a crawl.
@@ -139,10 +140,10 @@ function describe(c: Candidate): string {
 		c.kind === "slide"
 			? "the learner's own slide"
 			: c.kind === "page"
-				? `a page (link${c.licence ? `; licence stated: ${c.licence.label}` : ""})`
+				? `a page${c.licence ? ` (licence stated: ${c.licence.label})` : ""}`
 				: c.licence
-					? `licence ${c.licence.label}: can be shown`
-					: "NO licence read: link only";
+					? `a picture (licence ${c.licence.label})`
+					: "a picture";
 	const lines = [`${c.id} | ${c.title} | ${c.sourceName} | ${reuse}`];
 	if (c.description) lines.push(`   ${c.description}`);
 	return lines.join("\n");
@@ -184,7 +185,7 @@ const showInput = Type.Object({
 });
 const linksInput = Type.Object({
 	links: Type.Array(Type.Object({ id: Type.String({ minLength: 1 }), note: Type.String({ minLength: 1, description: "One line: what to look at on that page." }) }), { minItems: 1, maxItems: 3 }),
-	reason: Type.String({ minLength: 1, description: "Why no image is shown (blocked, no licence, not sure it matches, journal)." }),
+	reason: Type.String({ minLength: 1, description: "Why no image is shown (the site blocks downloads, or not sure it matches)." }),
 });
 const nothingInput = Type.Object({ reason: Type.String({ minLength: 1, description: "What you tried and why nothing fit." }) });
 
@@ -211,7 +212,7 @@ function createFigureTools(
 		registry.viewed.set(c.id, cached);
 		const facts = [
 			`${c.id}: ${c.title} — ${c.sourceName}`,
-			c.kind === "slide" ? "The learner's own lecture slide." : c.licence ? `Licence: ${c.licence.label} (can be shown).` : "No reusable licence was read: this can only be given as a link.",
+			c.kind === "slide" ? "The learner's own lecture slide." : c.licence ? `Licence: ${c.licence.label}.` : "",
 			c.description ? `Source description: ${c.description}` : "",
 			processed.ok ? "Look at the picture below, then decide." : processed.message,
 		].filter(Boolean);
@@ -356,18 +357,18 @@ function createFigureTools(
 		page_images: {
 			name: "page_images",
 			label: "page_images",
-			description: "Open one atlas or case page (an id from site_search) and list its pictures with the licence the page states. Journals cannot be opened.",
+			description: "Open one atlas or case page (an id from site_search) and list its pictures (with the licence the page states, when it states one). Journal pages can be opened too; a site that blocks the read is given as a link.",
 			parameters: pageInput,
 			execute: serverExecute("page_images", pageInput, async ({ id }): Promise<string> => {
 				const c = registry.get(id);
 				if (!c || c.kind !== "page" || !c.pageUrl) return `${id} is not a page candidate.`;
 				const source = figureSourceForPage(c.pageUrl);
-				if (!source || source.embed === "never") return `${c.sourceName} is copyrighted: give ${id} as a link; it cannot be opened or shown.`;
+				if (!source) return `${c.sourceName} is not on the list of figure sources: give ${id} as a link.`;
 				const out = await readFigurePage(c.pageUrl, sourceEnv());
 				if (!out.ok) return failureText("Opening the page", out) + ` ${id} is still a usable link.`;
 				const images = out.page.images.map((d) => registry.add(d));
 				return [
-					`${c.title}: ${out.page.licence ? `the page states ${out.page.licence.label}` : "the page states no reusable licence, so its pictures can only be linked"}.`,
+					`${c.title}: ${out.page.licence ? `the page states ${out.page.licence.label}` : "the page states no licence"}.`,
 					listOf(images, "No usable picture on the page. The page itself is still a usable link."),
 				].join("\n");
 			}),
@@ -418,9 +419,7 @@ function createFigureTools(
 				};
 				if (!args.confident) return shownAsLink("the finder was not confident the picture matches the concept");
 				const source = c.kind === "slide" ? null : figureSourceById(c.sourceId);
-				if (c.kind !== "slide" && (!source || source.embed === "never" || !c.licence)) {
-					return shownAsLink("no reusable licence was read for this picture");
-				}
+				if (c.kind !== "slide" && !source) return shownAsLink("this picture is not from a listed source");
 				// A library page: show only the band holding the figure, when the finder gave one.
 				let shown: Viewed = viewed;
 				if (c.kind === "slide" && c.slide && args.crop) {
@@ -437,7 +436,7 @@ function createFigureTools(
 					credit: c.kind === "slide" ? `From your library: ${c.slide?.bookTitle ?? c.title}` : candidateCredit(c),
 					// A page of a textbook in the library is the learner's copy of someone else's book,
 					// not their lecture material: only slide decks are labelled as their own.
-					licence: c.kind === "slide" ? (c.sourceName === LECTURE_SLIDES ? "Your own lecture material" : "Your library copy (personal study)") : c.licence!.label,
+					licence: c.kind === "slide" ? (c.sourceName === LECTURE_SLIDES ? "Your own lecture material" : "Your library copy (personal study)") : (c.licence?.label ?? ""),
 					...(c.licence?.url ? { licenceUrl: c.licence.url } : {}),
 				};
 				decide({ result: imageResult(input, image, shows, keyFeature, notShown) });
@@ -508,7 +507,7 @@ export function imageResult(input: FigureToolInput, image: FigureImage, shows: s
 		...(notShown ? { notShown } : {}),
 		links: [],
 		brief: [
-			`A real figure is now shown in the lesson (it is not drawn): "${image.title}" — ${image.source}, ${image.licence}. The credit and source link are printed on the card.`,
+			`A real figure is now shown in the lesson (it is not drawn): "${image.title}" — ${image.source}${image.licence ? `, ${image.licence}` : ""}. The credit and source link are printed on the card.`,
 			`It shows: ${shows}`,
 			`Key feature to point at: ${keyFeature}`,
 			...(notShown ? [`It does not show: ${notShown} (the card says so). Cover that part in words; never claim the picture shows it.`] : []),

@@ -280,7 +280,7 @@ export interface FigureImage {
 	/** The cached file's name (served at /api/figures/<chatId>/<file>). */
 	file: string;
 	mime: string;
-	tier: "slides" | "radiopaedia" | "specialty" | "commons" | "open-journal";
+	tier: "slides" | "radiopaedia" | "specialty" | "commons" | "open-journal" | "journal";
 	/** Where it came from, by name: "Radiopaedia", "Wikimedia Commons", "Your lecture slides". */
 	source: string;
 	/** The page the image sits on (for a lecture slide: absent). */
@@ -289,7 +289,7 @@ export interface FigureImage {
 	title: string;
 	/** "Author, via Source". */
 	credit: string;
-	/** "CC BY-SA 4.0", "Public domain", or "Your lecture slides". */
+	/** "CC BY-SA 4.0", "Public domain", or "Your lecture slides"; empty when no licence was read (the credit line still names the source and page). */
 	licence: string;
 	licenceUrl?: string;
 }

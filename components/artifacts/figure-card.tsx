@@ -107,7 +107,13 @@ export function FigureOutputCard({ output }: { output: unknown }) {
 						</span>
 					)}
 					<span className="break-words text-xs text-muted-foreground" data-testid="figure-credit">
-						{image.credit} · {image.licenceUrl && isHttps(image.licenceUrl) ? <ExternalLink href={image.licenceUrl}>{image.licence}</ExternalLink> : image.licence}
+						{image.credit}
+						{image.licence && (
+							<>
+								{" · "}
+								{image.licenceUrl && isHttps(image.licenceUrl) ? <ExternalLink href={image.licenceUrl}>{image.licence}</ExternalLink> : image.licence}
+							</>
+						)}
 						{isHttps(image.sourceUrl) && (
 							<>
 								{" · "}

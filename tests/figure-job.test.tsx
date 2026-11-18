@@ -270,6 +270,16 @@ describe("the figure card", () => {
 		assert.ok(!html.includes("javascript:"));
 	});
 
+	it("a picture with no licence on record still prints its credit line and source link, with no stray separator or empty licence", () => {
+		const html = renderToStaticMarkup(
+			inChat(<FigureOutputCard output={imageResult({ image: image({ tier: "journal", source: "High-tier journal", credit: "Spontaneous Pneumothorax, via High-tier journal", licence: "", licenceUrl: undefined, sourceUrl: "https://www.nejm.org/doi/full/10.1056/NEJMicm1", title: "Spontaneous Pneumothorax" }) })} />),
+		);
+		assert.match(html, /Spontaneous Pneumothorax, via High-tier journal/);
+		assert.match(html, /href="https:\/\/www\.nejm\.org\/doi\/full\/10\.1056\/NEJMicm1"[^>]*>Spontaneous Pneumothorax/);
+		assert.ok(!/via High-tier journal · · /.test(html), "no doubled separator");
+		assert.ok(!/via High-tier journal(<!-- -->)? · (<!-- -->)?<\/span>/.test(html), "no dangling separator");
+	});
+
 	it("works at phone width: the picture never exceeds the column and tall ones are capped", () => {
 		const html = renderToStaticMarkup(inChat(<FigureOutputCard output={imageResult()} />));
 		const img = /<img[^>]*>/.exec(html)![0];
@@ -382,7 +392,7 @@ describe("the teacher's figure rules", () => {
 			"`figure`",
 			"the learner's own lecture slides",
 			"Radiopaedia",
-			"copyrighted: link only",
+			"A picture from any of these may be shown whatever its licence",
 			"point at the key feature",
 			"Never \"as you can see\" about a picture that is not there",
 			"Never draw anatomy or how anything looks",

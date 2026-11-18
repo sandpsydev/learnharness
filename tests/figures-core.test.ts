@@ -60,13 +60,16 @@ describe("the source allow-list", () => {
 		assert.equal(figureSourceForPage("not a url"), null);
 	});
 
-	it("journals and PathologyOutlines are link only: no image host at all", () => {
-		for (const id of ["journal", "pathologyoutlines"]) {
-			const source = figureSourceById(id)!;
-			assert.equal(source.embed, "never");
-			assert.equal(figureImageAllowed(source, "https://www.nejm.org/na101/home/literatum/x.jpg"), false);
-			assert.equal(figureImageAllowed(source, `https://${source.pageHosts[0]}/img.jpg`), false);
-		}
+	it("journals and PathologyOutlines may show their own pictures (owner decision 2026-11-18), from their own hosts only", () => {
+		const journal = figureSourceById("journal")!;
+		assert.equal(figureImageAllowed(journal, "https://www.nejm.org/na101/home/literatum/x.jpg"), true);
+		assert.equal(figureImageAllowed(journal, "https://www.thelancet.com/cms/x.jpg"), true);
+		assert.equal(figureImageAllowed(journal, "https://upload.wikimedia.org/x.jpg"), false, "a journal does not open other hosts");
+		assert.equal(figureImageAllowed(journal, "http://www.nejm.org/x.jpg"), false, "https only");
+		const outlines = figureSourceById("pathologyoutlines")!;
+		assert.equal(figureImageAllowed(outlines, "https://www.pathologyoutlines.com/images/x.jpg"), true);
+		assert.equal(figureImageAllowed(outlines, "https://example.com/x.jpg"), false);
+		assert.equal("embed" in journal, false, "no per-source licence gate is left");
 	});
 
 	it("an image may only come from its own source's image hosts", () => {
@@ -82,7 +85,7 @@ describe("the source allow-list", () => {
 
 	it("every source declares the tier it is looked in", () => {
 		const tiers = new Set(FIGURE_SOURCES.map((s) => s.tier));
-		for (const tier of ["radiopaedia", "commons", "open-journal", "specialty", "journal-link"] as const) assert.ok(tiers.has(tier), tier);
+		for (const tier of ["radiopaedia", "commons", "open-journal", "specialty", "journal"] as const) assert.ok(tiers.has(tier), tier);
 	});
 });
 

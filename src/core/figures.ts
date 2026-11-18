@@ -6,13 +6,15 @@
  *
  * Two rules decide everything here:
  *  1. Only the sites in FIGURE_SOURCES are ever contacted (https only).
- *  2. An image is shown in the lesson only when a reusable licence is READ off
- *     the page or the file's own record. No licence found, or a source marked
- *     "never" (a journal, PathologyOutlines) = link only, never embedded.
+ *  2. Whether an image is shown never depends on its licence (owner decision
+ *     2026-11-18: personal study). A licence that is read is information kept in
+ *     the credit line; the credit line (author or title, source, page) is always
+ *     kept. What decides is the finder's look (a doubtful match is a link) and
+ *     whether the site lets the picture be downloaded (a blocked one is a link).
  */
 
 /** Where a figure came from, in the order the tutor looks. */
-export type FigureTier = "slides" | "radiopaedia" | "specialty" | "commons" | "open-journal" | "journal-link";
+export type FigureTier = "slides" | "radiopaedia" | "specialty" | "commons" | "open-journal" | "journal";
 
 export interface FigureSource {
 	id: string;
@@ -24,8 +26,6 @@ export interface FigureSource {
 	imageHosts: string[];
 	/** Hosts that serve this source's images only under a path prefix (a shared image CDN). */
 	sharedImageHosts?: { host: string; pathPrefix: string }[];
-	/** "licence" = embed only when a reusable licence is read; "never" = always link only. */
-	embed: "licence" | "never";
 	/** What the tutor should use it for (shown to the finder). */
 	covers: string;
 }
@@ -37,7 +37,6 @@ export const FIGURE_SOURCES: readonly FigureSource[] = [
 		tier: "radiopaedia",
 		pageHosts: ["radiopaedia.org"],
 		imageHosts: ["radiopaedia.org", "prod-images-static.radiopaedia.org"],
-		embed: "licence",
 		covers: "radiology cases and articles: X-ray, CT, MRI, ultrasound, nuclear medicine, angiography",
 	},
 	{
@@ -46,7 +45,6 @@ export const FIGURE_SOURCES: readonly FigureSource[] = [
 		tier: "commons",
 		pageHosts: ["commons.wikimedia.org"],
 		imageHosts: ["upload.wikimedia.org", "thumb.wikimedia.org"],
-		embed: "licence",
 		covers: "anatomy drawings, histology, clinical photographs, imaging, ECG tracings (each file carries its own licence)",
 	},
 	{
@@ -55,7 +53,6 @@ export const FIGURE_SOURCES: readonly FigureSource[] = [
 		tier: "open-journal",
 		pageHosts: ["europepmc.org", "www.ebi.ac.uk", "pmc.ncbi.nlm.nih.gov"],
 		imageHosts: ["europepmc.org", "cdn.ncbi.nlm.nih.gov", "pmc.ncbi.nlm.nih.gov"],
-		embed: "licence",
 		covers: "figures from open-access journal articles (case reports, reviews) under a Creative Commons licence",
 	},
 	{
@@ -64,7 +61,6 @@ export const FIGURE_SOURCES: readonly FigureSource[] = [
 		tier: "specialty",
 		pageHosts: ["dermnetnz.org"],
 		imageHosts: ["dermnetnz.org"],
-		embed: "licence",
 		covers: "dermatology: skin lesions, rashes, dermoscopy, histology",
 	},
 	{
@@ -74,7 +70,6 @@ export const FIGURE_SOURCES: readonly FigureSource[] = [
 		pageHosts: ["litfl.com"],
 		imageHosts: ["litfl.com"],
 		sharedImageHosts: ["i0.wp.com", "i1.wp.com", "i2.wp.com"].map((host) => ({ host, pathPrefix: "/litfl.com/" })),
-		embed: "licence",
 		covers: "ECG, emergency medicine, critical care, toxicology",
 	},
 	{
@@ -83,7 +78,6 @@ export const FIGURE_SOURCES: readonly FigureSource[] = [
 		tier: "specialty",
 		pageHosts: ["eyerounds.org"],
 		imageHosts: ["eyerounds.org"],
-		embed: "licence",
 		covers: "ophthalmology cases: fundus, slit-lamp, OCT, external eye photographs",
 	},
 	{
@@ -92,7 +86,6 @@ export const FIGURE_SOURCES: readonly FigureSource[] = [
 		tier: "specialty",
 		pageHosts: ["eyewiki.org"],
 		imageHosts: ["eyewiki.org"],
-		embed: "licence",
 		covers: "ophthalmology articles",
 	},
 	{
@@ -101,7 +94,6 @@ export const FIGURE_SOURCES: readonly FigureSource[] = [
 		tier: "specialty",
 		pageHosts: ["librepathology.org"],
 		imageHosts: ["librepathology.org", "upload.wikimedia.org"],
-		embed: "licence",
 		covers: "histopathology and cytology micrographs",
 	},
 	{
@@ -109,20 +101,18 @@ export const FIGURE_SOURCES: readonly FigureSource[] = [
 		name: "PathologyOutlines",
 		tier: "specialty",
 		pageHosts: ["pathologyoutlines.com"],
-		imageHosts: [],
-		embed: "never",
-		covers: "pathology topic pages (copyrighted: link only)",
+		imageHosts: ["pathologyoutlines.com"],
+		covers: "pathology topic pages",
 	},
 	{
 		id: "journal",
 		name: "High-tier journal",
-		tier: "journal-link",
-		// NEJM "Images in Clinical Medicine" and the peer journals. Copyrighted: the tutor links to
-		// the article with its title and a one-line description, and never fetches or embeds it.
+		tier: "journal",
+		// NEJM "Images in Clinical Medicine" and the peer journals. Their pictures are shown like any
+		// other source's (owner decision 2026-11-18); each journal's own hosts are the only image hosts.
 		pageHosts: ["nejm.org", "thelancet.com", "jamanetwork.com", "bmj.com", "acpjournals.org", "ahajournals.org"],
-		imageHosts: [],
-		embed: "never",
-		covers: "NEJM Images in Clinical Medicine, Lancet, JAMA, BMJ, Annals, Circulation (copyrighted: link only)",
+		imageHosts: ["nejm.org", "thelancet.com", "jamanetwork.com", "bmj.com", "acpjournals.org", "ahajournals.org"],
+		covers: "NEJM Images in Clinical Medicine, Lancet, JAMA, BMJ, Annals, Circulation",
 	},
 ];
 
@@ -132,7 +122,7 @@ export const FIGURE_TIER_LABEL: Record<FigureTier, string> = {
 	specialty: "Specialty atlas",
 	commons: "Wikimedia Commons",
 	"open-journal": "Open-access journal",
-	"journal-link": "Journal (link only)",
+	journal: "Journal",
 };
 
 const hostMatches = (host: string, allowed: string): boolean => host === allowed || host.endsWith(`.${allowed}`);
@@ -160,7 +150,6 @@ export function figureSourceForPage(raw: string): FigureSource | null {
 
 /** Whether `raw` is an image URL this source is allowed to serve from. */
 export function figureImageAllowed(source: FigureSource, raw: string): boolean {
-	if (source.embed === "never") return false;
 	const url = httpsUrl(raw);
 	if (!url) return false;
 	const host = url.hostname.toLowerCase();
@@ -188,10 +177,10 @@ const ccLabel = (elements: string, version?: string): string =>
 /**
  * Read a Creative Commons or public-domain licence out of free text: a licence URL, or a label such as
  * "CC BY-NC-SA 4.0", "cc by-nc" (Europe PMC) or "Public domain". Returns null when none is stated —
- * "all rights reserved", "fair use" and silence all read as null, which means link only.
+ * "all rights reserved", "fair use" and silence all read as null. The licence is information for the credit
+ * line only: a picture is shown whether or not one is read (owner decision 2026-11-18, personal study).
  *
- * Every Creative Commons variant is accepted, NC and ND included: the tutor shows an unaltered image with
- * credit, inside a personal study app, and never sells or edits it.
+ * Every Creative Commons variant is accepted, NC and ND included.
  */
 export function readFigureLicence(text: string): FigureLicence | null {
 	if (!text) return null;

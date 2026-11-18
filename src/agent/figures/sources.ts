@@ -5,12 +5,13 @@
  * guarded fetcher (fetch.ts).
  *
  *  - Wikimedia Commons: the official API. Each file's own licence, author and
- *    description come back with it, so Commons is the surest place to embed.
+ *    description come back with it, so Commons gives the fullest credit line.
  *  - Europe PMC: open-access articles (the licence is in the search record) and
  *    the figures in their full text.
  *  - Specialty atlases and Radiopaedia: a page is read for its images and for a
- *    Creative Commons notice. No notice found = link only.
- *  - Journals (NEJM and peers): never fetched, only linked.
+ *    Creative Commons notice (kept for the credit line; none found does not stop it being shown).
+ *  - Journals (NEJM and peers): opened like any other listed site; a site that blocks
+ *    the automated read or download is given as a link.
  */
 
 import { parseHTML } from "linkedom";
@@ -181,7 +182,7 @@ export function europePmcSearchUrl(query: string): string {
 
 export const europePmcArticleUrl = (pmcid: string): string => `https://europepmc.org/article/PMC/${pmcid.replace(/^PMC/i, "")}`;
 
-/** Open-access search results → article candidates (licence read from the record; none = link only). */
+/** Open-access search results → article candidates (licence read from the record, kept for the credit line). */
 export function parseEuropePmcResults(json: unknown): FigureCandidateDraft[] {
 	const results = (json as { resultList?: { result?: Array<Record<string, unknown>> } } | null)?.resultList?.result;
 	if (!Array.isArray(results)) return [];
@@ -391,11 +392,10 @@ export async function fetchEuropePmcFigures(pmcid: string, articleTitle: string,
 
 export type PageOutcome = { ok: true; page: ReadPage } | FetchFailure;
 
-/** Open an atlas or case page and list its pictures. Journals are never opened. */
+/** Open an atlas, case or journal page and list its pictures. */
 export async function readFigurePage(rawUrl: string, env: SourceEnv): Promise<PageOutcome | { ok: false; reason: "disallowed"; message: string }> {
 	const source = figureSourceForPage(rawUrl);
 	if (!source) return { ok: false, reason: "disallowed", message: "That site is not on the list of figure sources." };
-	if (source.embed === "never") return { ok: false, reason: "disallowed", message: `${source.name} is copyrighted: link to it, do not open or embed it.` };
 	const result = await fetchFigureText(rawUrl, { allow: allowPage, fetchImpl: env.fetchImpl, signal: env.signal });
 	if (!result.ok) return result;
 	return { ok: true, page: parsePageImages(result.text, result.finalUrl, source) };

@@ -324,6 +324,38 @@ test('toEffort maps low..max verbatim, minimal to "low", undefined to "medium"',
 	assert.equal(toEffort(undefined), "medium");
 });
 
+function textScenario(text: string): string[] {
+	return [
+		streamEvent({ type: "message_start", message: { usage: { input_tokens: 1 } } }),
+		streamEvent({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+		streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }),
+		streamEvent({ type: "content_block_stop", index: 0 }),
+		streamEvent({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } }),
+		streamEvent({ type: "message_stop" }),
+	];
+}
+
+const LEAKED_QUIZ = '[tool call quiz] {"type":"check","nodeId":"breast-imaging","question":"Which view?","options":[{"label":"CC"}]}';
+
+test("a tool call written out as text is stripped from a reply that has other text", async (t) => {
+	const { events } = await runScenario(t, textScenario(`Here is the check.\n\n${LEAKED_QUIZ}\n\nAnswer when ready.`));
+
+	const done = getLastEvent(events);
+	assert.ok(done.type === "done");
+	assert.deepEqual(done.message.content, [{ type: "text", text: "Here is the check.\n\nAnswer when ready." }]);
+});
+
+test("a reply that is only a tool call written out as text becomes an error, never raw JSON", async (t) => {
+	const { events } = await runScenario(t, textScenario(`${LEAKED_QUIZ}\n\n${LEAKED_QUIZ}`));
+
+	const last = getLastEvent(events);
+	assert.ok(last.type === "error");
+	assert.equal(last.reason, "error");
+	assert.match(last.error.errorMessage ?? "", /raw tool text instead of a real tool call/);
+	assert.ok(!JSON.stringify(last.error.content).includes("tool call quiz"));
+	assert.ok(!events.some((event) => event.type === "done"));
+});
+
 test("text scenario streams start, text_start, text_delta…, text_end, done(stop)", async (t) => {
 	const { events, calls } = await runScenario(t, readFixtureLines("text.jsonl"));
 
@@ -711,7 +743,7 @@ test("user message after tool results starts fresh with unfinished calls in the 
 	await assertCleanedUp(oldCall);
 
 	const stdin = readFileSync(stdinFile, "utf8");
-	assert.ok(stdin.includes('[tool call read] {\\"path\\":\\"a\\"}'), stdin);
+	assert.ok(stdin.includes('[earlier tool use, already done: read] {\\"path\\":\\"a\\"}'), stdin);
 	assert.ok(stdin.includes("wait, explain sockets first"), stdin);
 });
 
@@ -806,8 +838,8 @@ test("a tool result arriving after the idle timeout starts fresh with the call a
 	await assertCleanedUp(getOnlyCall(fresh.calls));
 
 	const stdin = readFileSync(stdinFile, "utf8");
-	assert.ok(stdin.includes('[tool call read] {\\"path\\":\\"a\\"}'), stdin);
-	assert.ok(stdin.includes("[tool result read]"), stdin);
+	assert.ok(stdin.includes('[earlier tool use, already done: read] {\\"path\\":\\"a\\"}'), stdin);
+	assert.ok(stdin.includes("[earlier tool result: read]"), stdin);
 	assert.ok(stdin.includes("contents of a"), stdin);
 });
 

@@ -29,6 +29,7 @@ import { ClaudeLaunchError, createClaudeLauncher } from "./launch.ts";
 import { parseCliLine, type CliBlock, type CliEvent, type CliUsage } from "./cli-events.ts";
 import { ClaudeCodeError } from "./constants.ts";
 import { ContextWindowProbe } from "./context-window.ts";
+import { hasLeakedToolCall, stripLeakedToolCalls } from "./leaked-tool-call.ts";
 import { addLiveProcess, getLiveProcess, removeLiveProcess, type LiveProcess } from "./live-processes.ts";
 import { configurationForReuse, conversationForReuse } from "./reuse-context.ts";
 import { BRIDGE_SERVER_NAME, createToolBridge, toolNameFromMcp, type PendingToolCall, type ToolBridge } from "./tool-bridge.ts";
@@ -69,6 +70,7 @@ const ABORT_MESSAGE = "Request was aborted";
 const START_FAILED_MESSAGE = "claude CLI failed to start";
 const NO_STOP_REASON_MESSAGE = "claude CLI ended the message without a stop reason";
 const NOT_SIGNED_IN_ERROR = "authentication_failed";
+const LEAKED_TOOL_CALL_MESSAGE = "The reply came back as raw tool text instead of a real tool call, so it was not shown. Send your message again to retry.";
 
 export function toEffort(level: ThinkingLevel | undefined): AnthropicEffort {
 	return level ? EFFORTS[level] : "medium";
@@ -360,9 +362,33 @@ class ClaudeTurn {
 			return;
 		}
 
+		if (this.removeLeakedToolCalls()) {
+			this.fail(LEAKED_TOOL_CALL_MESSAGE, "error");
+			return;
+		}
+
 		this.finished = true;
 		this.stream.push({ type: "done", reason: stopReason, message: this.output });
 		this.stream.end();
+	}
+
+	/**
+	 * A model that prints a tool call as text (`[tool call quiz] {...}`) leaves the learner with raw
+	 * JSON and no quiz. Strip that text from the final message; true means nothing else was
+	 * said or called, so the turn has no reply worth showing and must report failure instead.
+	 */
+	private removeLeakedToolCalls(): boolean {
+		let leaked = false;
+
+		this.output.content = this.output.content.flatMap((block) => {
+			if (block.type !== "text" || !hasLeakedToolCall(block.text)) return [block];
+
+			leaked = true;
+			const text = stripLeakedToolCalls(block.text);
+			return text ? [{ ...block, text }] : [];
+		});
+
+		return leaked && !this.output.content.some((block) => block.type === "toolCall" || (block.type === "text" && block.text.trim()));
 	}
 }
 

@@ -13,6 +13,20 @@ export type ClaudeInput = {
 
 type ReplayPart = string | ImageContent;
 
+/**
+ * Earlier tool calls are replayed as past-tense history, never as something shaped like a call
+ * (`[tool call quiz] {json}`), because the model copies what it sees in the transcript and then
+ * prints that text instead of making the real tool call. Keep these labels in step with
+ * leaked-tool-call.ts, which strips any that still leak into a reply.
+ */
+export const TOOL_USE_LABEL_PREFIX = "[earlier tool use, already done: ";
+export const TOOL_RESULT_LABEL_PREFIX = "[earlier tool result: ";
+
+const HISTORY_NOTE =
+	`Note on the record below: entries starting "${TOOL_USE_LABEL_PREFIX.trim()}" and "${TOOL_RESULT_LABEL_PREFIX.trim()}" ` +
+	"are tools you already used earlier and what came back. They are history, not a format to write. " +
+	"To use a tool now, make a real tool call; never write a tool call out as text.";
+
 function toImageBlock(image: ImageContent): ClaudeContentBlock {
 	return { type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } };
 }
@@ -37,12 +51,12 @@ function getReplayParts(message: Message): ReplayPart[] {
 		case "assistant":
 			return message.content.flatMap((block) => {
 				if (block.type === "text") return [`[assistant]\n${block.text}`];
-				if (block.type === "toolCall") return [`[tool call ${block.name}] ${JSON.stringify(block.arguments)}`];
+				if (block.type === "toolCall") return [`${TOOL_USE_LABEL_PREFIX}${block.name}] ${JSON.stringify(block.arguments)}`];
 				return [];
 			});
 
 		case "toolResult": {
-			const label = message.isError ? `[tool result ${message.toolName} error]` : `[tool result ${message.toolName}]`;
+			const label = `${TOOL_RESULT_LABEL_PREFIX}${message.toolName}${message.isError ? ", failed" : ""}]`;
 			return getLabelledParts(label, message.content);
 		}
 	}
@@ -81,7 +95,10 @@ function toUserContent(conversation: Message[]): ClaudeContentBlock[] {
 	const [first] = conversation;
 	if (conversation.length === 1 && first?.role === "user") return toUnlabelledBlocks(first.content);
 
-	return toContentBlocks(conversation.flatMap(getReplayParts));
+	const parts = conversation.flatMap(getReplayParts);
+	const usedTools = conversation.some((message) => message.role === "toolResult" || (message.role === "assistant" && message.content.some((block) => block.type === "toolCall")));
+
+	return toContentBlocks(usedTools ? [HISTORY_NOTE, ...parts] : parts);
 }
 
 export function toClaudeInput(messages: Message[]): ClaudeInput {

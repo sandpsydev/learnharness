@@ -124,9 +124,9 @@ describe("keyless researcher loop", () => {
 			assert.ok(system.toolsAdded?.some((t) => t.name === "web_fetch"));
 			return fauxAssistantMessage([fauxText("Prompt verified; no model behavior inferred.")]);
 		}]);
-		assert.equal(await runResearcherAgent("Check the prompt only", {
+		assert.deepEqual(await runResearcherAgent("Check the prompt only", {
 			engine: { model: faux.getModel(), streamFn: faux.streamSimple },
-		}), "Prompt verified; no model behavior inferred.");
+		}), { brief: "Prompt verified; no model behavior inferred.", cutShort: false });
 	});
 
 	// These scripts prove tool/loop mechanics, not real-model compliance.
@@ -171,10 +171,10 @@ describe("keyless researcher loop", () => {
 				return new Response("Synthetic verified source content", { headers: { "content-type": "text/plain" } });
 			}) as typeof fetch;
 			try {
-				assert.equal(await runResearcherAgent(`Verify ${url}`, {
+				assert.deepEqual(await runResearcherAgent(`Verify ${url}`, {
 					engine: { model: faux.getModel(), streamFn: faux.streamSimple },
 					// No search seam: this is the keyless backstop, not a search stub.
-				}), brief);
+				}), { brief, cutShort: false });
 				assert.deepEqual(fetched, [url]);
 			} finally {
 				globalThis.fetch = realFetch;

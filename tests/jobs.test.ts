@@ -44,6 +44,7 @@ import {
 	type VisualResult,
 	buildProbeHandoffSteer,
 } from "../src/core/contracts.ts";
+import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import { composeInstructions, createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { webTools } from "../src/agent/tools/web.ts";
@@ -664,6 +665,78 @@ describe("research runner (async protocol §3)", () => {
 		assert.ok((done.result as ResearchResult).sources.some((s) => s.url === url));
 		assert.equal(delivery.steers.length, 1);
 		assert.equal(isSubagentFailure("research", done.result as ResearchResult), false);
+	});
+
+	it("a researcher that hits its step cap still delivers a cut-short brief from a tool-less wrap-up call", async () => {
+		// Reproduction (2026-11-21): a demanding question kept the researcher
+		// calling tools through all 12 steps; the loop stopped at the cap with
+		// no text and the job read "the researcher produced no text".
+		const urls = Array.from({ length: 12 }, (_, i) => `https://guidelines.example.org/doc-${i + 1}`);
+		const chat = chatStore.createChat("Test: researcher step cap");
+		trackChat(chat.id);
+		chatStore.saveMessages(chat.id, nativeToolMessages("verify guidelines", "research", "call-cap1", RESEARCH_INPUT));
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-cap1" });
+		trackJob(job.id);
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver, searchProvider: () => null });
+		const realFetch = globalThis.fetch;
+		globalThis.fetch = (async () => new Response("guideline text", { headers: { "content-type": "text/plain" } })) as typeof fetch;
+		const toolsSeen: number[] = [];
+		const record = (response: AssistantMessage): FauxResponseStep => (context) => {
+			toolsSeen.push(getCurrentTools(context.messages).length);
+			return response;
+		};
+		const wrapUpBrief = `## Summary\nTwo of the guidelines were checked. [Doc 1](${urls[0]})\n\n## Sources\n- Doc 1 (${urls[0]})\n\n## Gaps\nThe other guidelines were not reached.`;
+		researchModelOverride.current = fauxEngine([
+			...urls.map((url, i) => record(fauxAssistantMessage([fauxToolCall("web_fetch", { url }, { id: `cap-${i}` })], { stopReason: "toolUse" }))),
+			record(fauxAssistantMessage([fauxText(wrapUpBrief)])),
+		]);
+		try {
+			await runner.runJob(job.id);
+		} finally {
+			researchModelOverride.current = undefined;
+			globalThis.fetch = realFetch;
+		}
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "done", done.error);
+		const result = done.result as ResearchResult;
+		assert.equal(isSubagentFailure("research", result), false);
+		assert.match(result.brief, /^\*\*Cut short:\*\*.*step limit/, "the brief opens with a plain cut-short line");
+		assert.ok(result.brief.includes(wrapUpBrief), "the wrap-up brief follows the cut-short line");
+		// Sources: the cited one first, then every other page the researcher fetched (capped at 10).
+		assert.equal(result.sources[0]!.url, urls[0]);
+		assert.deepEqual(result.sources.map((s) => s.url), urls.slice(0, 10));
+		// 12 capped steps + exactly one wrap-up call, and only the wrap-up had no tools.
+		assert.equal(toolsSeen.length, 13);
+		assert.ok(toolsSeen.slice(0, 12).every((n) => n > 0), "the first 12 calls carried the tools");
+		assert.equal(toolsSeen[12], 0, "the wrap-up call carried no tools");
+		assert.equal(done.usage?.steps, 13);
+	});
+
+	it("a capped researcher whose wrap-up call also yields no text keeps today's error", async () => {
+		const chat = chatStore.createChat("Test: researcher step cap, empty wrap-up");
+		trackChat(chat.id);
+		chatStore.saveMessages(chat.id, nativeToolMessages("verify guidelines", "research", "call-cap2", RESEARCH_INPUT));
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-cap2" });
+		trackJob(job.id);
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver, searchProvider: () => null });
+		const realFetch = globalThis.fetch;
+		globalThis.fetch = (async () => new Response("x", { headers: { "content-type": "text/plain" } })) as typeof fetch;
+		researchModelOverride.current = fauxEngine([
+			...Array.from({ length: 12 }, (_, i) => fauxAssistantMessage([fauxToolCall("web_fetch", { url: `https://example.org/${i}` }, { id: `e-${i}` })], { stopReason: "toolUse" })),
+			fauxAssistantMessage([]),
+		]);
+		try {
+			await runner.runJob(job.id);
+		} finally {
+			researchModelOverride.current = undefined;
+			globalThis.fetch = realFetch;
+		}
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "error");
+		assert.match(done.error ?? "", /the researcher produced no text/);
+		assert.equal(done.usage?.steps, 13, "the wrap-up call is still the only extra call");
 	});
 
 	it("a failing runner still steers (the teacher learns the outcome) and the job lands error", async () => {

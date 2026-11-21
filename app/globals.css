@@ -604,6 +604,35 @@ body {
 	}
 }
 
+/* A figure mention in the teacher's text that names a figure card of this chat
+   (components/figure-refs.tsx): a blue link that pops the picture up in place.
+   Light and dark both carry their own blue; the dotted underline keeps it a
+   link for colour-blind readers, and the button reset keeps it inline. */
+.lh-figure-ref {
+	color: #2563eb;
+	cursor: pointer;
+	text-decoration: underline;
+	text-decoration-style: dotted;
+	text-underline-offset: 3px;
+	touch-action: manipulation;
+	-webkit-tap-highlight-color: transparent;
+	border-radius: 0.2rem;
+}
+.dark .lh-figure-ref {
+	color: #7ab8ff;
+}
+.lh-figure-ref:hover {
+	text-decoration-style: solid;
+}
+.lh-figure-ref:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 2px;
+}
+/* The link's own emphasis (the book name inside it) keeps the link colour. */
+.lh-figure-ref :where(em, strong) {
+	color: inherit;
+}
+
 /* Source-message arrival: a brief, static theme-colored spotlight. */
 .lh-source-passage {
 	scroll-margin-top: 1rem;

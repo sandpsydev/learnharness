@@ -34,6 +34,7 @@ import {
   type PluginConfig,
 } from "streamdown";
 import { mdComponents } from "@/components/md-blocks";
+import { FIGURE_ALLOWED_TAGS, useFigureRefPlugins } from "@/components/figure-refs";
 import { repairMathForDisplay, transformMathDelimiters } from "@/src/core";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -370,6 +371,9 @@ export const MessageResponse = memo(
       typeof children === "string"
         ? transformMathDelimiters(children)
         : children;
+    // Figure links: a mention of a figure card shown in this chat becomes a
+    // link (components/figure-refs.tsx). No cards → the plain plugin set.
+    const plugins = useFigureRefPlugins(streamdownPlugins);
 
     return (
       <Streamdown
@@ -380,7 +384,8 @@ export const MessageResponse = memo(
           className
         )}
         components={mdComponents}
-        plugins={streamdownPlugins}
+        plugins={plugins}
+        allowedTags={FIGURE_ALLOWED_TAGS}
         remend={streamdownRemend}
         {...props}
       >

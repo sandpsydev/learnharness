@@ -27,7 +27,7 @@ import { VisualOutputCard } from "@/components/artifacts/visual-card";
  *     The sub-agent's verification notes are model-facing glue and do NOT
  *     render; only a failure note does.
  */
-export function SubagentSteerCard({ message }: { message: LhViewMessage }) {
+export function SubagentSteerCard({ message, cardId }: { message: LhViewMessage; cardId?: string }) {
 	const artifactPart = message.parts.find((p) => p.type === "data-subagent-artifact");
 	const data = artifactPart?.data as SubagentArtifactData | undefined;
 	// The abort steer (2026-09 dock semantics): its message-type part is
@@ -60,7 +60,7 @@ export function SubagentSteerCard({ message }: { message: LhViewMessage }) {
 		case "demo":
 			return <DemoOutputCard output={data.result} messageId={message.id} initialInverted={data.ui?.inverted ?? false} />;
 		case "figure":
-			return <FigureOutputCard output={data.result} />;
+			return <FigureOutputCard output={data.result} cardId={cardId} />;
 		case "visual":
 			return <VisualOutputCard output={data.result} messageId={message.id} initialInverted={data.ui?.inverted ?? false} />;
 	}

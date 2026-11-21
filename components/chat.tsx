@@ -49,10 +49,13 @@ import {
 	type ModelSlotName,
 } from "@/src/core";
 import { TestOutStep } from "@/components/test-out-step";
-import { derivePlanStatuses, isTestOutQuestion } from "@/src/core";
+import { derivePlanStatuses, figureCardId, figureCardsKey, figureCardsOf, isTestOutQuestion } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
+import { FigureRefsContext, type FigureRefsValue } from "@/components/figure-refs";
+import { FigurePeek } from "@/components/figure-peek";
+import { scrollSessionTarget } from "@/components/session-navigation";
 import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog";
 import { ArrowRightIcon, DumbbellIcon, WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
@@ -381,7 +384,7 @@ export function Chat({
 		const onAbort = () => {
 			const target = escAbortTarget({
 				abortAsk: abortAskRef.current !== null,
-				mermaidFocus: mermaidFocusRef.current !== null || figureFocusRef.current !== null,
+				mermaidFocus: mermaidFocusRef.current !== null || figureFocusRef.current !== null || figurePeekRef.current !== null,
 				planOpen: planOpenRef.current,
 				setupOpen: setupOpenRef.current,
 				pending: pendingRef.current !== null,
@@ -906,6 +909,31 @@ export function Chat({
 	// document level by the overlay itself); the window chain must stay out.
 	const figureFocusRef = useRef(figureFocus);
 	figureFocusRef.current = figureFocus;
+	// The figure pop-up (figure links): a mention of a shown figure in the
+	// teacher's text opens it over the chat. It claims Esc itself, like the
+	// focuses above, so the window chain stays out while it is open.
+	const [figurePeek, setFigurePeek] = useState<{ ids: string[]; trigger: HTMLElement | null } | null>(null);
+	const figurePeekRef = useRef(figurePeek);
+	figurePeekRef.current = figurePeek;
+	// The figure cards this chat shows — rebuilt only when the set of pictures changes
+	// (not on every streamed token), so already-rendered text is not re-parsed.
+	const figureCardsNow = figureCardsOf(messages);
+	const figureCardsRef = useRef(figureCardsNow);
+	if (figureCardsKey(figureCardsNow) !== figureCardsKey(figureCardsRef.current)) figureCardsRef.current = figureCardsNow;
+	const figureCards = figureCardsRef.current;
+	const showFigureInChat = useCallback((cardId: string) => {
+		setFigurePeek(null);
+		const target = document.querySelector<HTMLElement>(`[data-figure-card-id="${CSS.escape(cardId)}"]`);
+		const main = scrollContextRef.current?.scrollRef.current;
+		if (!target || !main) return;
+		scrollSessionTarget(target, main, scrollContextRef.current);
+		target.classList.add("lh-source-highlight");
+		window.setTimeout(() => target.classList.remove("lh-source-highlight"), 2_000);
+	}, []);
+	const figureRefs = useMemo<FigureRefsValue>(
+		() => ({ cards: figureCards, open: (ids, trigger) => setFigurePeek({ ids, trigger }) }),
+		[figureCards],
+	);
 	const planOpenRef = useRef(planOpen);
 	planOpenRef.current = planOpen;
 	const setupOpenRef = useRef(setupOpen);
@@ -1266,6 +1294,7 @@ export function Chat({
 				openSetup: () => setSetupOpen(true),
 			}}
 		>
+		<FigureRefsContext.Provider value={figureRefs}>
 		<SessionMermaidContext.Provider
 			value={{
 				openMermaid: setMermaidFocus,
@@ -1426,7 +1455,7 @@ export function Chat({
 									// and centered like the teacher's artifacts (contracts.ts "THE ASYNC
 									// PROTOCOL" §4). Key fallback: legacy transcripts (pre id-hygiene)
 									// can still hold empty ids — the index keeps keys unique for them.
-									<SubagentSteerCard key={m.id || `m-${mi}`} message={m} />
+									<SubagentSteerCard key={m.id || `m-${mi}`} message={m} cardId={figureCardId(m, mi)} />
 								) : m.role === "user" && m.parts.some((p) => p.type === "data-probe-handoff") ? (
 								// The probe→teach handoff wake (custom-message scheme): the
 								// PLANNING DIVIDER IS the seam (owner ruling 2026-09-26 — it
@@ -1796,6 +1825,15 @@ export function Chat({
 						onClose={() => setFigureFocus(null)}
 					/>
 				)}
+				{figurePeek !== null && (
+					<FigurePeek
+						chatId={chatId}
+						cards={figureCards.filter((c) => figurePeek.ids.includes(c.id))}
+						trigger={figurePeek.trigger}
+						onClose={() => setFigurePeek(null)}
+						onShowInChat={showFigureInChat}
+					/>
+				)}
 				{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
 				<AbortTurnDialog mode={abortAsk} onClose={() => setAbortAsk(null)} onConfirm={confirmAbort} busy={busy} />
 				</div>
@@ -1803,6 +1841,7 @@ export function Chat({
 		</div>
 		</JobsContext.Provider>
 		</SessionMermaidContext.Provider>
+		</FigureRefsContext.Provider>
 		{/* The BYOK setup flow (owner, 2026-09-22): one mount serves the
 		    persistent CTA, the refused-send interception, and the job cards'
 		    deep-link. Save keeps the draft in the composer — it never sends

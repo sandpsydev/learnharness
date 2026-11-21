@@ -33,7 +33,7 @@ const lookup: AgentTool<any, any> = {
 	label: "Lookup",
 	description: "Look something up",
 	parameters: Type.Object({ q: Type.String() }),
-	execute: async (_id, args: { q: string }) => ({ content: [{ type: "text", text: `result for ${args.q}` }], details: null }),
+	execute: async (_id, args) => ({ content: [{ type: "text", text: `result for ${(args as { q: string }).q}` }], details: null }),
 };
 
 function piEngine(steps: FauxResponseStep[]): PiEngine {

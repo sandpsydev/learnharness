@@ -312,8 +312,8 @@ test("a question answered after the idle timeout starts a fresh CLI process that
 	assert.equal(getLastAssistantText(chatId), "hello there");
 
 	const replay = readFileSync(fakeRun.stdinFiles[1] ?? "", "utf8");
-	assert.ok(replay.includes("[tool call ask_user_question]"), replay);
+	assert.ok(replay.includes("[earlier tool use, already done: ask_user_question]"), replay);
 	assert.ok(replay.includes(ASK_INPUT.question), replay);
-	assert.ok(replay.includes("[tool result ask_user_question]"), replay);
+	assert.ok(replay.includes("[earlier tool result: ask_user_question]"), replay);
 	assert.ok(replay.includes(ANSWER_TEXT), replay);
 });

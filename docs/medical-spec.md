@@ -232,6 +232,15 @@ A button on a teaching session that writes **one review note for that session** 
 - **The app's own copy.** `data/recaps/` holds each recap (and its pictures); the vault note is rendered from it by the same live sync, so a moved or emptied vault is rebuilt without spending anything. **The sync never removes a recap note**, even if the session is deleted. The vault write layer's confinement rules are unchanged.
 - **Files:** `src/core/contracts/recap.ts`, `src/core/session-recap.ts` (transcript, check, note), `src/agent/subagents/recapwriter.ts` and `src/agent/prompts/recap/` (the writer), `src/store/recaps.ts`, `src/server/recap.ts` (the run), `src/server/obsidian.ts` (the recap notes in the sync), `app/api/chats/[id]/recap/route.ts`, `components/session-recap.tsx`.
 
+## Figure links (owner request 2026-11-22)
+
+When the teacher's text names a figure that is shown as a figure card in the same chat, the mention is a blue link. Tapping it pops that picture up over the chat — larger, with its caption, "Look for", credit line and source link — so the learner does not scroll back to find it. Closing (X, Esc, or a tap outside) returns to exactly the place they were reading, and focus goes back to the link. The pop-up has a small **Show in chat** action that closes it, scrolls to that card and flashes it. Code only: no prompt and no change to the picture finder.
+
+- **What counts as a mention.** A page, slide or figure number the teacher writes (`p.597`, `library p.708`, `slide 12`, `Fig. 17-21`, `Figure 35.7B`, `panel C`), joined when they sit together (`*Schwartz* 2019, p.597, Fig. 17-21, panel C`). The book's name (italic or plain) must stand just before a page. A figure card's own title also counts for pictures from outside the library. The link covers the whole citation, the italic book name and year included.
+- **Which card it names.** Only cards actually in this chat. The book and page must be those on the card's credit title (`<book> p.N`, `<lecture>, slide N`); the figure number and panel letter come from the finder's caption. If the mention states a figure number or panel, a card that states a different one is ruled out. Of the cards left, the best match wins (figure number, then panel/letter); when nothing tells them apart (`*Sabiston* p.857` with three panels on that page) the pop-up shows all of them.
+- **What stays plain.** A page with no card in the chat, a different book, a figure number no card shows, a page with no book named, a bare figure number without chapter style (`Figure 3`), a bare number two books share, code, math and existing links.
+- **Old chats.** Cards are read from the saved chat, so old chats link too. A card is identified by its delivery message, not by the picture file: the finder caches one picture per page, so several cards of a page can share one file.
+
 ## Repo / workflow
 
 - Public GitHub fork of `amosblomqvist/learnharness` under the owner's account; work on branch `medical` (the fork's default branch); `main` mirrors upstream and is merged into `medical` periodically.

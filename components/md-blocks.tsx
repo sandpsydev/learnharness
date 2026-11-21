@@ -42,6 +42,7 @@ import { MermaidError } from "@/components/mermaid-error";
 import { blurAfterPointerClick } from "@/components/focus-hygiene";
 import { chartSize, useSessionMermaid } from "@/components/session-overlay";
 import { Hint } from "@/components/ui/hint";
+import { FigureRefLink } from "@/components/figure-refs";
 
 // ─── The one affordance: the hover-reveal corner copy ────────────────────────
 
@@ -469,4 +470,6 @@ export const mdComponents = {
 	span: MathDisplay,
 	strong: MarkdownStrong,
 	blockquote: MarkdownBlockquote,
+	// A figure mention that names a card of this chat (src/core/figure-refs.ts).
+	"lh-figref": FigureRefLink,
 };

@@ -5,7 +5,7 @@ import { ExternalLinkIcon } from "lucide-react";
 import { ChatActionsContext } from "@/components/chat";
 import { DispatchCard } from "@/components/artifacts/dispatch-card";
 import { figureImagePath, isSubagentFailure } from "@/src/core";
-import type { ArtifactPartProps, FigureLink, FigureResult } from "@/src/core";
+import type { ArtifactPartProps, FigureImage, FigureLink, FigureResult } from "@/src/core";
 
 /**
  * The real-figure card (medical fork). The tool part is only the dispatch ack, so
@@ -34,6 +34,28 @@ function ExternalLink({ href, children }: { href: string; children: React.ReactN
 	);
 }
 
+/** The credit line under a picture: credit, licence, and the link to its source. Shared by the card and the figure pop-up. */
+export function FigureCredit({ image }: { image: FigureImage }) {
+	return (
+		<span className="break-words text-xs text-muted-foreground" data-testid="figure-credit">
+			{image.credit}
+			{image.licence && (
+				<>
+					{" · "}
+					{image.licenceUrl && isHttps(image.licenceUrl) ? <ExternalLink href={image.licenceUrl}>{image.licence}</ExternalLink> : image.licence}
+				</>
+			)}
+			{isHttps(image.sourceUrl) && (
+				<>
+					{" · "}
+					<ExternalLink href={image.sourceUrl}>{image.title}</ExternalLink>
+				</>
+			)}
+			{!isHttps(image.sourceUrl) && <> · {image.title}</>}
+		</span>
+	);
+}
+
 function LinkList({ links }: { links: FigureLink[] }) {
 	return (
 		<ul className="flex flex-col gap-2" data-testid="figure-links">
@@ -53,7 +75,8 @@ function LinkList({ links }: { links: FigureLink[] }) {
 }
 
 /** The delivered figure — exported: the steer card renders it. */
-export function FigureOutputCard({ output }: { output: unknown }) {
+/** `cardId` names the card for the figure links ("show in chat" scrolls to it). */
+export function FigureOutputCard({ output, cardId }: { output: unknown; cardId?: string }) {
 	const result = output as FigureResult | undefined;
 	const actions = useContext(ChatActionsContext);
 	if (!result || typeof result.brief !== "string") {
@@ -78,7 +101,7 @@ export function FigureOutputCard({ output }: { output: unknown }) {
 	if (result.outcome === "image" && image && actions?.chatId) {
 		const src = figureImagePath(actions.chatId, image.file);
 		return (
-			<figure className="my-4 w-full max-w-full" data-testid="figure-card">
+			<figure className="my-4 w-full max-w-full" data-testid="figure-card" data-figure-card-id={cardId}>
 				{/* A real picture, scaled to the column (never wider), tall ones capped so a phone screen still shows the caption. */}
 				<a href={src} target="_blank" rel="noopener noreferrer" aria-label="Open the picture full size">
 					{/* A plain <img>: the file is already cached on this machine, so next/image's optimizer has nothing to add. */}
@@ -106,22 +129,7 @@ export function FigureOutputCard({ output }: { output: unknown }) {
 							{result.notShown}
 						</span>
 					)}
-					<span className="break-words text-xs text-muted-foreground" data-testid="figure-credit">
-						{image.credit}
-						{image.licence && (
-							<>
-								{" · "}
-								{image.licenceUrl && isHttps(image.licenceUrl) ? <ExternalLink href={image.licenceUrl}>{image.licence}</ExternalLink> : image.licence}
-							</>
-						)}
-						{isHttps(image.sourceUrl) && (
-							<>
-								{" · "}
-								<ExternalLink href={image.sourceUrl}>{image.title}</ExternalLink>
-							</>
-						)}
-						{!isHttps(image.sourceUrl) && <> · {image.title}</>}
-					</span>
+					<FigureCredit image={image} />
 				</figcaption>
 			</figure>
 		);

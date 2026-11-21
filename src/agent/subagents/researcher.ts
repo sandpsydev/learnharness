@@ -73,6 +73,25 @@ Numbered findings with inline source citations:
 ## Gaps
 What couldn't be answered. Suggested next steps.`;
 
+/** The researcher's step cap (model calls). The step-limit rescue below adds
+ *  exactly one more, tool-less, call — it never raises this. */
+const MAX_TURNS = 12;
+
+/** The last user turn of the step-limit rescue: written in code (the
+ *  INSTRUCTIONS above stay untouched), sent with no tools available. */
+const WRAP_UP_INSTRUCTION = `You have used all of your research steps and no tools are available now, so do not try to call any. Write your final brief now, in the required format, using only what you have already found above. Under Sources list every page you actually opened; under Gaps say plainly what you did not get to check. Never fill in a missing fact from memory.`;
+
+/** The one plain line that opens a brief written after the step limit. */
+export const CUT_SHORT_LINE = "**Cut short:** the search hit its step limit before it finished, so this brief may be missing sources or checks (see Gaps).";
+
+export interface ResearcherResult {
+	/** The brief (final text). Opens with CUT_SHORT_LINE when `cutShort`. */
+	brief: string;
+	/** True when the step limit ended the search and the brief came from the
+	 *  tool-less wrap-up call. */
+	cutShort: boolean;
+}
+
 export interface ResearcherRunOptions {
 	engine?: PiEngine;
 	/** The search seam (search port wave, 2026-09-20): resolves the LIVE
@@ -97,21 +116,27 @@ export interface ResearcherRunOptions {
  * text = the brief. The engine and search seam are injectable so tests run
  * the loop scripted.
  */
-export async function runResearcherAgent(prompt: string, opts: ResearcherRunOptions = {}): Promise<string> {
+export async function runResearcherAgent(prompt: string, opts: ResearcherRunOptions = {}): Promise<ResearcherResult> {
 	const tools = Object.values(createWebTools(opts.search ?? (() => null)));
 	if (opts.pdfDir) tools.push(...Object.values(createPdfReadTools(opts.pdfDir)));
-	const { text } = await runSubagent(tools, {
+	const { text, wrappedUp } = await runSubagent(tools, {
 		role: "researcher",
 		prompt,
 		engine: opts.engine,
 		systemPrompt: INSTRUCTIONS,
-		maxTurns: 12,
+		maxTurns: MAX_TURNS,
+		// Opt-in step-limit rescue: a search that runs out of steps still
+		// writes its brief from what it found (shared loop, researcher only).
+		wrapUp: { instruction: WRAP_UP_INSTRUCTION },
 		abortSignal: opts.abortSignal,
 		onUsage: opts.onUsage,
 		onToolStart: opts.onToolStart,
 		chatId: opts.chatId,
 	});
-	return text;
+	// Mark a rescued brief as cut short — in code, so it is always there and
+	// always plain, whatever the model wrote. A wrap-up that wrote nothing
+	// comes back as plain empty text, which the runner reports as before.
+	return wrappedUp ? { brief: `${CUT_SHORT_LINE}\n\n${text.trim()}`, cutShort: true } : { brief: text, cutShort: false };
 }
 
 export type ResearcherAgent = ReturnType<typeof runResearcherAgent>;

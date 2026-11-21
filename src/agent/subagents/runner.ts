@@ -384,7 +384,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
 		try {
 			jobStore.updateJob(jobId, { activity: "researching" });
-			const brief = await runResearcherAgent(prompt, {
+			const { brief, cutShort } = await runResearcherAgent(prompt, {
 				engine: model,
 				search: deps.searchProvider,
 				pdfDir,
@@ -402,7 +402,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 				},
 			});
 			if (!brief.trim()) throw new Error("the researcher produced no text");
-			const research: ResearchResult = { brief: brief.trim(), sources: parseSources(brief.trim(), fetchedUrls) };
+			const research: ResearchResult = { brief: brief.trim(), sources: parseSources(brief.trim(), fetchedUrls, cutShort) };
 			await finishJob(jobId, research);
 		} catch (err) {
 			// Real-kill abort (2026-09): the abort path flipped the record and
@@ -615,8 +615,11 @@ function hostOf(url: string | undefined): string {
 	}
 }
 
-/** Sources for the result: markdown links cited in the brief, else fetched URLs. */
-function parseSources(brief: string, fetchedUrls: string[]): ResearchResult["sources"] {
+/** Sources for the result: markdown links cited in the brief, else fetched
+ *  URLs. A brief cut short by the step limit may not have cited everything it
+ *  opened, so there (`keepFetched`) every fetched URL is listed after the
+ *  cited ones. */
+function parseSources(brief: string, fetchedUrls: string[], keepFetched = false): ResearchResult["sources"] {
 	const sources: ResearchResult["sources"] = [];
 	const seen = new Set<string>();
 	for (const match of brief.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g)) {
@@ -626,7 +629,7 @@ function parseSources(brief: string, fetchedUrls: string[]): ResearchResult["sou
 		seen.add(url);
 		sources.push({ title, url });
 	}
-	if (sources.length === 0) {
+	if (sources.length === 0 || keepFetched) {
 		for (const url of fetchedUrls) {
 			if (seen.has(url)) continue;
 			seen.add(url);

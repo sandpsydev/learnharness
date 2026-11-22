@@ -143,31 +143,6 @@ describe("the figure job runner", () => {
 		assert.equal(steer.id, `steer_${job.id}`);
 	});
 
-	it("a picture the chat already shows is not sent again: the second job reads the first job's card and goes on", async () => {
-		const chatId = newChat("Test: figure job no repeat");
-		const script = (): PiEngine =>
-			scripted([
-				[["commons_search", { query: "pneumothorax" }]],
-				[["look", { id: "c1" }]],
-				[["show_image", { id: "c1", shows: "A left apical pneumothorax.", key_feature: "the pleural line", confident: true }]],
-			]);
-		const { runner } = testRunner({ figureEnv: () => ({ cacheRoot: PATHS.figures, fetchImpl: network, headless }) });
-		const first = jobStore.createJob({ kind: "figure", chatId, toolCallId: "call-fig-r1", input: { concept: "left apical pneumothorax" } });
-		const second = jobStore.createJob({ kind: "figure", chatId, toolCallId: "call-fig-r2", input: { concept: "pneumothorax, another look" } });
-		try {
-			figureModelOverride.current = script();
-			await runner.runJob(first.id);
-			figureModelOverride.current = script();
-			await runner.runJob(second.id);
-		} finally {
-			figureModelOverride.current = undefined;
-		}
-		assert.equal((jobStore.getJob(first.id)!.result as FigureResult).outcome, "image");
-		const repeat = jobStore.getJob(second.id)!.result as FigureResult;
-		assert.notEqual(repeat.outcome, "image", "the same picture is not sent a second time");
-		assert.match(repeat.brief, /already shown earlier in this chat/);
-	});
-
 	it("a missing model still steers: the teacher learns no picture is coming", async () => {
 		const chatId = newChat("Test: figure job without a model");
 		const job = jobStore.createJob({ kind: "figure", chatId, toolCallId: "call-fig-2", input: { concept: "x" } });

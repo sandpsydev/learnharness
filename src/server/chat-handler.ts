@@ -317,7 +317,7 @@ export async function handleChatInput(
 	try {
 		appends =
 			input.type === "steers"
-				? input.steers.filter((s) => !steerDelivered(record.messages, s.id))
+				? input.steers.filter((s, i) => !steerDelivered(record.messages, s.id) && input.steers.findIndex((first) => first.id === s.id) === i)
 				: inputAppends(record, input);
 	} catch (err) {
 		if (err instanceof ChatInputError) {
@@ -432,9 +432,18 @@ export async function handleChatInput(
 		purpose: callPurpose,
 		scopeCurrent: (scope) => connectionScopeCurrent(conversation.provider, scope),
 		commitStaged: () => {
-			stores.chatStore.saveMessages(chatId, merged);
+			// Add the staged markers to the record as it is NOW, not to the copy read
+			// when this wake began: a run that saved in between (a learner's answer
+			// run, another wake) must keep its messages, and a marker it already
+			// saved must not be added a second time.
+			const current = stores.chatStore.getChat(chatId)?.messages ?? record.messages;
+			const staged = appends.filter((message) => !current.some((saved) => saved.id === message.id));
+			const committed = [...current, ...staged];
+			stores.chatStore.saveMessages(chatId, committed);
+			// The count that matters is the AGENT's own history (its start plus the staged
+			// markers), not the saved record's length.
 			persistBaseCount = merged.length;
-			noteSteersDurable(chatId, merged);
+			noteSteersDurable(chatId, committed);
 		},
 		restoreAutomatic: (automaticIds, retainedIds) => restoreUncommittedAutomatic(chatId, constructed, automaticIds, retainedIds),
 	});

@@ -50,6 +50,11 @@ function toolResult(toolName: string, content: ToolResultMessage["content"], isE
 	return { role: "toolResult", toolCallId: `${toolName}-1`, toolName, content, isError, timestamp: 0 };
 }
 
+/** The text the model reads: the replay's text blocks put together, as the one big block used to read. */
+function replayText(messages: Message[]): string {
+	return toClaudeInput(messages).userContent.map((block) => (block.type === "text" ? block.text : "")).join("");
+}
+
 test("system prompt joins all system content, then the live sections", () => {
 	const messages: Message[] = [
 		system({ content: "You are a tutor.", sections: { goals: "Teach TCP.", style: "Be brief." } }),
@@ -98,7 +103,7 @@ test("history renders user, assistant text, tool call name+JSON args and tool re
 		"[assistant]\nIt has a heading.",
 		"[user]\nsummarise it",
 	].join("\n\n");
-	assert.deepEqual(toClaudeInput(messages).userContent, [{ type: "text", text: expected }]);
+	assert.equal(replayText(messages), expected);
 });
 
 test("error tool results are marked as errors in the replay", () => {
@@ -115,7 +120,7 @@ test("error tool results are marked as errors in the replay", () => {
 		"[earlier tool result: read, failed]\nENOENT",
 		"[user]\nwhy?",
 	].join("\n\n");
-	assert.deepEqual(toClaudeInput(messages).userContent, [{ type: "text", text: expected }]);
+	assert.equal(replayText(messages), expected);
 });
 
 test("images in user and tool-result content become base64 image blocks", () => {
@@ -129,9 +134,11 @@ test("images in user and tool-result content become base64 image blocks", () => 
 		user("compare"),
 	];
 	assert.deepEqual(toClaudeInput(messages).userContent, [
-		{ type: "text", text: `${HISTORY_NOTE}\n\n[user]\nlook` },
+		{ type: "text", text: HISTORY_NOTE },
+		{ type: "text", text: "\n\n[user]\nlook" },
 		{ type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
-		{ type: "text", text: "[earlier tool use, already done: screenshot] {}\n\n[earlier tool result: screenshot]" },
+		{ type: "text", text: "[earlier tool use, already done: screenshot] {}" },
+		{ type: "text", text: "\n\n[earlier tool result: screenshot]" },
 		{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "BBBB" } },
 		{ type: "text", text: "[user]\ncompare" },
 	]);
@@ -144,7 +151,7 @@ test("transcript ending on a tool result renders as history with no trailing use
 		toolResult("read", [{ type: "text", text: "# Notes" }]),
 	];
 	const expected = [HISTORY_NOTE, "[user]\nopen notes.md", '[earlier tool use, already done: read] {"path":"notes.md"}', "[earlier tool result: read]\n# Notes"].join("\n\n");
-	assert.deepEqual(toClaudeInput(messages).userContent, [{ type: "text", text: expected }]);
+	assert.equal(replayText(messages), expected);
 });
 
 test("a replayed quiz call never looks like a call the model could imitate", () => {
@@ -156,9 +163,7 @@ test("a replayed quiz call never looks like a call the model could imitate", () 
 		toolResult("quiz", [{ type: "text", text: answer }]),
 		user("What's desmoplastic reaction?"),
 	];
-	const [block] = toClaudeInput(messages).userContent;
-	assert.ok(block?.type === "text");
-	const text = block.text;
+	const text = replayText(messages);
 
 	assert.ok(!text.includes("[tool call"), text);
 	assert.ok(!text.includes("[tool result"), text);
@@ -169,7 +174,7 @@ test("a replayed quiz call never looks like a call the model could imitate", () 
 
 test("a transcript with no tool use gets no history note", () => {
 	const messages: Message[] = [user("hi"), assistant([{ type: "text", text: "Hello." }]), user("bye")];
-	assert.deepEqual(toClaudeInput(messages).userContent, [{ type: "text", text: "[user]\nhi\n\n[assistant]\nHello.\n\n[user]\nbye" }]);
+	assert.equal(replayText(messages), "[user]\nhi\n\n[assistant]\nHello.\n\n[user]\nbye");
 });
 
 test("thinking blocks are omitted from replay", () => {
@@ -181,7 +186,7 @@ test("thinking blocks are omitted from replay", () => {
 		]),
 		user("bye"),
 	];
-	assert.deepEqual(toClaudeInput(messages).userContent, [{ type: "text", text: "[user]\nhi\n\n[assistant]\nHello.\n\n[user]\nbye" }]);
+	assert.equal(replayText(messages), "[user]\nhi\n\n[assistant]\nHello.\n\n[user]\nbye");
 });
 
 test('toStreamJsonLine emits {"type":"user","message":{"role":"user","content":[...]}}', () => {

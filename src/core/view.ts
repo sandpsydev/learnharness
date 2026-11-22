@@ -34,7 +34,7 @@
 
 import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { LhMarkerMessage, LhMessage } from "./native-messages.ts";
-import { modelSolutionForConclude, PRACTICE_CONCLUDE_TOOL, problemInputForConclude, SEND_TO_USER_TOOL, sendToUserText } from "./native-messages.ts";
+import { dropRepeatedSteers, modelSolutionForConclude, PRACTICE_CONCLUDE_TOOL, problemInputForConclude, SEND_TO_USER_TOOL, sendToUserText } from "./native-messages.ts";
 import { activeCompactionOf, type CompactionDetails } from "./compaction.ts";
 import { QUESTION_TOOLS } from "./pending.ts";
 import type { SubagentArtifactData, SubagentResultMeta } from "./contracts/jobs.ts";
@@ -125,7 +125,10 @@ function lastSuccessfulPlanInit(parts: LhViewPart[]): number {
 
 /** Project the native record (+ live turn working list) into the client's
  *  view messages. Pure: the same input always projects to the same list. */
-export function projectView(messages: readonly LhMessage[], live?: LiveTurnState): LhViewMessage[] {
+export function projectView(recorded: readonly LhMessage[], live?: LiveTurnState): LhViewMessage[] {
+	// A steer id saved twice (an old chat from before the duplicate guard)
+	// shows once, at its first place; the saved record stays as it is.
+	const messages = dropRepeatedSteers(recorded);
 	const out: LhViewMessage[] = [];
 	// Output calls become text rather than tool parts, so read settled
 	// failures up front: a failed call must retain the normal error path.

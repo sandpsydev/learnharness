@@ -62,25 +62,34 @@ function getReplayParts(message: Message): ReplayPart[] {
 	}
 }
 
+/**
+ * One content block per replayed entry, never one block for the whole record.
+ *
+ * Whenever a held process cannot be continued (a background result arrived between a tool call and
+ * the next model call, a process timed out), the whole record is sent again as a fresh user message.
+ * The prompt cache matches a request against an earlier one at content-block boundaries, up to the
+ * block the request ends on. One big block can only ever match the part before it (the system
+ * prompt and tools), so every such restart re-wrote the entire conversation at full price; a
+ * measured turn re-wrote 91k to 114k tokens on each of five steps and read only 31,851 each time.
+ * With a block per entry, each earlier entry stays byte-identical as the record grows, so the next
+ * replay ends on blocks the previous one already stored.
+ *
+ * The text is unchanged: the blocks put together read exactly as the single block did (each block
+ * after the first starts with the blank line that used to sit between entries).
+ */
 function toContentBlocks(parts: ReplayPart[]): ClaudeContentBlock[] {
 	const blocks: ClaudeContentBlock[] = [];
-	let pendingText: string[] = [];
-
-	const flushText = () => {
-		if (pendingText.length > 0) blocks.push({ type: "text", text: pendingText.join("\n\n") });
-		pendingText = [];
-	};
+	let afterText = false;
 
 	for (const part of parts) {
 		if (typeof part === "string") {
-			pendingText.push(part);
+			blocks.push({ type: "text", text: afterText ? `\n\n${part}` : part });
+			afterText = true;
 		} else {
-			flushText();
 			blocks.push(toImageBlock(part));
+			afterText = false;
 		}
 	}
-
-	flushText();
 
 	return blocks;
 }

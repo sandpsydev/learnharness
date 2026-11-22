@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
 import { serverExecute, type ImageFileResult } from "../tool-execute.ts";
@@ -45,6 +45,11 @@ import { runSubagent } from "./pi-run.ts";
  * becomes a link. Its licence plays no part (owner decision 2026-11-18,
  * personal study): a licence that was read goes in the credit line, and the
  * credit line is always kept.
+ *
+ * One more rule is held in code (owner request 2026-11-22): a library picture is
+ * not accepted while the web has not been tried when the finder itself says it is
+ * doubtful or lacks something the tutor asked for. It is held back once, the web
+ * sources are searched, and the held picture is the fallback.
  */
 
 export interface FigureFinderEnv {
@@ -188,6 +193,17 @@ const linksInput = Type.Object({
 	reason: Type.String({ minLength: 1, description: "Why no image is shown (the site blocks downloads, or not sure it matches)." }),
 });
 const nothingInput = Type.Object({ reason: Type.String({ minLength: 1, description: "What you tried and why nothing fit." }) });
+type ShowArgs = Static<typeof showInput>;
+
+/** The state one finder run carries between its tools. */
+interface RunState {
+	/** A web source (Commons, Europe PMC, a site search) has been searched in this run. */
+	webTried: boolean;
+	/** Library pictures held back once already: a second show_image on one of them goes through. */
+	heldBack: Set<string>;
+	/** The partial library picture to fall back on when the web finds nothing better. */
+	partial: ShowArgs | null;
+}
 
 const oneLine = (text: string, max: number): string => {
 	const t = text.replace(/\s+/g, " ").trim();
@@ -201,7 +217,8 @@ function createFigureTools(
 	registry: Registry,
 	decide: (d: Decision) => void,
 	resizeOptions: () => import("../image-processing/index.ts").ProcessImageOptions["resizeOptions"],
-): Record<string, AgentTool<any>> {
+): { tools: Record<string, AgentTool<any>>; settle: () => Promise<void> } {
+	const state: RunState = { webTried: false, heldBack: new Set(), partial: null };
 	const sourceEnv = () => ({ fetchImpl: env.fetchImpl, signal: signalOf() });
 	const failureText = (what: string, f: { reason: string; message: string }): string =>
 		`${what} failed (${f.reason}): ${f.message}${f.reason === "blocked" ? " This site does not allow automated downloads: offer its page as a link instead." : ""}`;
@@ -257,7 +274,76 @@ function createFigureTools(
 		return showToModel(c, { file: cached.file, mime: cached.mime }, cached.bytes);
 	}
 
-	return {
+	/** The picture the finder wants to return, after the code's own check. The string is what the finder is told. */
+	async function showCandidate(args: ShowArgs, settling: boolean): Promise<string> {
+		const c = registry.get(args.id);
+		if (!c) return `No candidate ${args.id}.`;
+		const viewed = registry.viewed.get(c.id);
+		if (!viewed) return `Look at ${c.id} first: a picture is shown only after you have seen it.`;
+		const shows = oneLine(args.shows, 400);
+		const keyFeature = oneLine(args.key_feature, 300);
+		const notShown = args.not_shown?.trim() ? oneLine(args.not_shown, 300) : undefined;
+		const shownAsLink = (why: string): string => {
+			if (!c.pageUrl) {
+				decide({ result: noneResult(input, `${c.title} may be relevant, but ${why}, so it is not shown. Tell the learner where to look: ${c.title}.`) });
+				return "Recorded: not shown; nothing to link.";
+			}
+			decide({ result: linkResult(input, [{ title: c.title, url: c.pageUrl, source: c.sourceName, note: oneLine(`${shows} Look for: ${keyFeature}`, 240) }], why) });
+			return `Recorded as a link (${why}).`;
+		};
+		/** A library picture the finder doubts, or says lacks something asked for, is held back once so the web is tried first. */
+		const holdBack = (lacks: string): string | null => {
+			if (c.kind !== "slide" || settling || state.webTried || state.heldBack.has(c.id)) return null;
+			state.heldBack.add(c.id);
+			state.partial = args;
+			return [
+				`Not shown yet: ${c.title} is a picture from the learner's own library and the web sources have not been tried. The tutor asked for: ${input.concept}.`,
+				lacks,
+				"If what is missing is the main thing the tutor asked for, find a picture that shows it first: commons_search, europepmc_search or site_search, then look at the best candidates and show the one that does.",
+				"If you find nothing better, call show_image for this picture again (or nothing_found) and it is shown as the closest match, with what it lacks said plainly.",
+				"If what is missing is only a minor detail, call show_image again now with the same arguments.",
+			].join("\n");
+		};
+		if (!args.confident) {
+			return holdBack("You said you are not sure it shows the concept.") ?? shownAsLink("the finder was not confident the picture matches the concept");
+		}
+		const source = c.kind === "slide" ? null : figureSourceById(c.sourceId);
+		if (c.kind !== "slide" && !source) return shownAsLink("this picture is not from a listed source");
+		if (notShown) {
+			const held = holdBack(`It lacks: ${notShown}`);
+			if (held) return held;
+		}
+		// A library page: show only the band holding the figure, when the finder gave one.
+		let shown: Viewed = viewed;
+		if (c.kind === "slide" && c.slide && args.crop) {
+			const band = await figureBand(env, c.slide, viewed, args.crop);
+			if (band) shown = band;
+		}
+		const image: FigureImage = {
+			file: shown.file,
+			mime: shown.mime,
+			tier: c.tier as FigureImage["tier"],
+			source: c.sourceName,
+			...(c.pageUrl ? { sourceUrl: c.pageUrl } : {}),
+			title: c.title,
+			credit: c.kind === "slide" ? `From your library: ${c.slide?.bookTitle ?? c.title}` : candidateCredit(c),
+			// A page of a textbook in the library is the learner's copy of someone else's book,
+			// not their lecture material: only slide decks are labelled as their own.
+			licence: c.kind === "slide" ? (c.sourceName === LECTURE_SLIDES ? "Your own lecture material" : "Your library copy (personal study)") : (c.licence?.label ?? ""),
+			...(c.licence?.url ? { licenceUrl: c.licence.url } : {}),
+		};
+		decide({ result: imageResult(input, image, shows, keyFeature, notShown) });
+		return "Recorded: the picture will be shown in the lesson.";
+	}
+
+	/** The held-back library picture, shown as the closest match (the web found nothing better, or the run ended). */
+	async function settle(): Promise<void> {
+		const held = state.partial;
+		state.partial = null;
+		if (held) await showCandidate(held, true);
+	}
+
+	const tools: Record<string, AgentTool<any>> = {
 		slides_search: {
 			name: "slides_search",
 			label: "slides_search",
@@ -290,6 +376,7 @@ function createFigureTools(
 			description: "Search Wikimedia Commons for pictures (anatomy, histology, clinical photos, imaging, ECG). Each result carries its own licence.",
 			parameters: queryInput,
 			execute: serverExecute("commons_search", queryInput, async ({ query }): Promise<string> => {
+				state.webTried = true;
 				const out = await searchCommons(query, sourceEnv());
 				if (!out.ok) return failureText("Wikimedia Commons search", out);
 				return listOf(out.candidates.map((d) => registry.add(d)), `Commons has no picture file for "${query}".`);
@@ -302,6 +389,7 @@ function createFigureTools(
 			description: "Search open-access journal articles (Europe PMC). Returns article candidates with their licence; use europepmc_figures to list an article's figures.",
 			parameters: queryInput,
 			execute: serverExecute("europepmc_search", queryInput, async ({ query }): Promise<string> => {
+				state.webTried = true;
 				const out = await searchEuropePmc(query, sourceEnv());
 				if (!out.ok) return failureText("Europe PMC search", out);
 				return listOf(out.candidates.map((d) => registry.add(d)), `No open-access article found for "${query}".`);
@@ -331,6 +419,7 @@ function createFigureTools(
 				`Sources: ${FIGURE_SOURCES.filter((s) => SITE_SOURCES.includes(s.id)).map((s) => `${s.id} (${s.covers})`).join("; ")}.`,
 			parameters: siteInput,
 			execute: serverExecute("site_search", siteInput, async ({ source: sourceId, query }): Promise<string> => {
+				state.webTried = true;
 				const source = figureSourceById(sourceId);
 				if (!source) return `Unknown source ${sourceId}.`;
 				const provider = env.search?.() ?? null;
@@ -401,47 +490,7 @@ function createFigureTools(
 			label: "show_image",
 			description: "FINISH: show the picture you looked at in the lesson, with your caption and the key feature. Only when you are confident it matches.",
 			parameters: showInput,
-			execute: serverExecute("show_image", showInput, async (args): Promise<string> => {
-				const c = registry.get(args.id);
-				if (!c) return `No candidate ${args.id}.`;
-				const viewed = registry.viewed.get(c.id);
-				if (!viewed) return `Look at ${c.id} first: a picture is shown only after you have seen it.`;
-				const shows = oneLine(args.shows, 400);
-				const keyFeature = oneLine(args.key_feature, 300);
-				const notShown = args.not_shown?.trim() ? oneLine(args.not_shown, 300) : undefined;
-				const shownAsLink = (why: string): string => {
-					if (!c.pageUrl) {
-						decide({ result: noneResult(input, `${c.title} may be relevant, but ${why}, so it is not shown. Tell the learner where to look: ${c.title}.`) });
-						return "Recorded: not shown; nothing to link.";
-					}
-					decide({ result: linkResult(input, [{ title: c.title, url: c.pageUrl, source: c.sourceName, note: oneLine(`${shows} Look for: ${keyFeature}`, 240) }], why) });
-					return `Recorded as a link (${why}).`;
-				};
-				if (!args.confident) return shownAsLink("the finder was not confident the picture matches the concept");
-				const source = c.kind === "slide" ? null : figureSourceById(c.sourceId);
-				if (c.kind !== "slide" && !source) return shownAsLink("this picture is not from a listed source");
-				// A library page: show only the band holding the figure, when the finder gave one.
-				let shown: Viewed = viewed;
-				if (c.kind === "slide" && c.slide && args.crop) {
-					const band = await figureBand(env, c.slide, viewed, args.crop);
-					if (band) shown = band;
-				}
-				const image: FigureImage = {
-					file: shown.file,
-					mime: shown.mime,
-					tier: c.tier as FigureImage["tier"],
-					source: c.sourceName,
-					...(c.pageUrl ? { sourceUrl: c.pageUrl } : {}),
-					title: c.title,
-					credit: c.kind === "slide" ? `From your library: ${c.slide?.bookTitle ?? c.title}` : candidateCredit(c),
-					// A page of a textbook in the library is the learner's copy of someone else's book,
-					// not their lecture material: only slide decks are labelled as their own.
-					licence: c.kind === "slide" ? (c.sourceName === LECTURE_SLIDES ? "Your own lecture material" : "Your library copy (personal study)") : (c.licence?.label ?? ""),
-					...(c.licence?.url ? { licenceUrl: c.licence.url } : {}),
-				};
-				decide({ result: imageResult(input, image, shows, keyFeature, notShown) });
-				return "Recorded: the picture will be shown in the lesson.";
-			}),
+			execute: serverExecute("show_image", showInput, (args): Promise<string> => showCandidate(args, false)),
 		},
 
 		give_links: {
@@ -466,12 +515,18 @@ function createFigureTools(
 			label: "nothing_found",
 			description: "FINISH: nothing usable was found.",
 			parameters: nothingInput,
-			execute: serverExecute("nothing_found", nothingInput, ({ reason }): string => {
+			execute: serverExecute("nothing_found", nothingInput, async ({ reason }): Promise<string> => {
+				// A partial library picture held back earlier is the fallback: "nothing better" means it is shown after all.
+				if (state.partial) {
+					await settle();
+					return "Recorded.";
+				}
 				decide({ result: noneResult(input, oneLine(reason, 300)) });
 				return "Recorded.";
 			}),
 		},
 	};
+	return { tools, settle };
 }
 
 /** The cropped band of a rendered library page, cached beside the page. Null = show the whole page. */
@@ -559,18 +614,17 @@ export async function runFigureFinder(input: FigureToolInput, opts: FigureFinder
 	const registry = new Registry();
 	let decision: Decision | null = null;
 	const engine = opts.engine;
-	const tools = Object.values(
-		createFigureTools(
-			opts.env,
-			input,
-			() => opts.abortSignal,
-			registry,
-			(d) => {
-				decision ??= d;
-			},
-			() => engine?.model.inputLimits?.images?.resize,
-		),
+	const { tools: toolSet, settle } = createFigureTools(
+		opts.env,
+		input,
+		() => opts.abortSignal,
+		registry,
+		(d) => {
+			decision ??= d;
+		},
+		() => engine?.model.inputLimits?.images?.resize,
 	);
+	const tools = Object.values(toolSet);
 	const prompt = [
 		`Concept to show: ${input.concept}`,
 		input.modality ? `Kind of picture: ${input.modality}` : null,
@@ -591,6 +645,8 @@ export async function runFigureFinder(input: FigureToolInput, opts: FigureFinder
 		onToolStart: (toolName, args) => opts.onActivity?.(activityLine(toolName, args)),
 		chatId: opts.env.chatId,
 	});
+	// No decision (out of steps, or the model just stopped): a held-back library picture still goes to the lesson.
+	if (decision === null) await settle();
 	return (decision as Decision | null)?.result ?? noneResult(input, "the search ended without a decision.");
 }
 

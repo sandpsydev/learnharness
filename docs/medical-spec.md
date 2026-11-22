@@ -241,6 +241,15 @@ When the teacher's text names a figure that is shown as a figure card in the sam
 - **What stays plain.** A page with no card in the chat, a different book, a figure number no card shows, a page with no book named, a bare figure number without chapter style (`Figure 3`), a bare number two books share, code, math and existing links.
 - **Old chats.** Cards are read from the saved chat, so old chats link too. A card is identified by its delivery message, not by the picture file: the finder caches one picture per page, so several cards of a page can share one file.
 
+## Figure finder: a library miss goes on to the web (owner request 2026-11-22)
+
+The owner asked for a labelled picture of one structure (the lactiferous sinus) and got a textbook card whose own note said the sinus is not labelled, with no web source tried. The point is that the finder picks the most fitting picture for the teaching: a picture already in the chat is fine to show again when it does show what was asked; when it does not, a picture from the internet is wanted. There is no "never show the same picture twice" rule. The rule is held in code (`src/agent/subagents/figure-finder.ts`); the finder's own instructions and the teacher prompts are unchanged.
+
+- **Library first stays the default.** A library picture with nothing lacking is shown straight away, with no web request.
+- **A library picture that lacks the main thing goes on to the web first.** When the finder itself marks a library picture as lacking something asked for (`not_shown`) or as doubtful (`confident: false`), and no web source has been tried yet, the app holds it back once and tells the finder to search the web sources it already has (Commons, Europe PMC, site-limited search for Radiopaedia, atlases and journals) for a picture that shows it, and to prefer one that does.
+- **Fallback.** If the finder judges the missing part minor it confirms by calling show_image again and the library picture is shown. If the web finds nothing better, or the finder runs out of steps, the held-back library picture is shown as the closest match with what it lacks said plainly.
+- Unchanged: look before show, the crop, the credit line, a doubtful match becomes a link, the step budget (16), a partial outside picture is shown as before, and the recap's picture lookups.
+
 ## Repo / workflow
 
 - Public GitHub fork of `amosblomqvist/learnharness` under the owner's account; work on branch `medical` (the fork's default branch); `main` mirrors upstream and is merged into `medical` periodically.

@@ -3,6 +3,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
 import type { JobRecord } from "../../core/contracts.ts";
 import type { JobStore } from "../../core/ports.ts";
+import { RESEARCH_LIMIT_NOTE, type EvidenceBudget } from "../evidence-budget.ts";
 
 /**
  * Async sub-agent job tools (vision §2.5; W2/W6 kinds + the pi-model
@@ -27,6 +28,9 @@ export interface JobToolContext {
 	 *  Research dispatch does not depend on it: web_fetch is keyless and
 	 *  web_search reports a missing provider as a recoverable tool result. */
 	searchAvailable?: () => boolean;
+	/** The teacher's per-learner-message research allowance (evidence-budget.ts).
+	 *  Absent = unlimited (the prober, practice and bare test contexts). */
+	evidence?: EvidenceBudget;
 }
 
 export const researchInputSchema = Type.Object({
@@ -88,8 +92,12 @@ function dispatch(
 	toolCallId: string,
 	ack: string,
 	input: ResearchInput | DemoInput | VisualInput | PdfInput | FigureInput,
+	refuse?: () => string | null,
 ): string {
 	const existing = ctx.jobStore.findJobByToolCallId(ctx.chatId, toolCallId);
+	// A repeat of an already-started call never counts against the limit again.
+	const refusal = existing ? null : refuse?.();
+	if (refusal) return refusal;
 	const job = existing ?? ctx.jobStore.createJob({ kind, chatId: ctx.chatId, toolCallId, input });
 	if (!existing) ctx.spawn(job, input);
 	return `Dispatched (job ${job.id}). ${ack}`;
@@ -157,7 +165,9 @@ export function jobTools(ctx: JobToolContext): Record<string, AgentTool<any>> {
 			description: RESEARCH_DESCRIPTION,
 			parameters: researchInputSchema,
 			execute: serverExecute("research", researchInputSchema, (input, { toolCallId }) =>
-				dispatch(ctx, "research", toolCallId, RESEARCH_ACK, input),
+				dispatch(ctx, "research", toolCallId, RESEARCH_ACK, input, () =>
+					ctx.evidence && !ctx.evidence.claimResearch() ? RESEARCH_LIMIT_NOTE : null,
+				),
 			),
 		},
 		demo: {

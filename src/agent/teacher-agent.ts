@@ -6,6 +6,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { PATHS } from "../../config.ts";
 import { APP_IDENTITY, piEngineFor, type PiEngine } from "./models.ts";
 import { effectivePromptSegments } from "./prompt-segments.ts";
+import { evidenceBudgetFor } from "./evidence-budget.ts";
 import {
 	askUserQuestionTool,
 	createProberTools,
@@ -292,7 +293,13 @@ export function createTeacherAgent(
 	ctx?: TeacherToolContext,
 	opts: AgentBuildOptions = {},
 ) {
-	const tools = opts.tools ?? (ctx ? createTeacherTools(ctx, opts.toolToggles) : bareQuestionTools());
+	// The research / Expert AI allowance per learner message: seeded from the
+	// saved transcript so a job result waking the teacher never resets it.
+	const tools =
+		opts.tools ??
+		(ctx
+			? createTeacherTools({ ...ctx, evidence: ctx.evidence ?? evidenceBudgetFor(opts.messages) }, opts.toolToggles)
+			: bareQuestionTools());
 	return baseAgentOptions("teacher", opts, Object.values(tools));
 }
 

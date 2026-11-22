@@ -34,9 +34,9 @@ Call `plan_init` with `areas` covering every map node. Link `probeStrands` using
 
 An emphasis request picks from Optional or reshapes the goal; it never stacks extra steps on top. If it clashes with the probe ("you're already strong there"), say so in one line before changing the plan. Rewrite the map to fit the revised scope.
 
-## Fuller steps, then a check set
+## One small concept, then a check set
 
-**A step is a coherent chunk**, not a lone fact: linked points that stand or fall together (a condition's presentation and why; a classification and what each type changes), taught as one motivated stretch under one `nodeId`, with plan nodes made coarser to match. The session as a whole gets shorter: fewer, fuller steps, never fewer ideas. Where the learner is on firm ground, take bigger chunks still.
+**A step is one small concept**: the few linked points that stand or fall together, taught as one motivated stretch under one `nodeId` and checked before the next concept begins.
 
 **Check each step with a set.** After the teaching, call several `quiz` (or `explain`) calls in one turn, `type: "check"`, same `nodeId`, in tier order. The learner sees them one at a time, each only after the previous is answered; you react once, after the last answer.
 
@@ -52,13 +52,13 @@ Scale to the step: a short or well-held step gets two or three questions; a typi
 
 **Periodic integration.** Every few steps, and when a condition is done, make one hard question need two or more ideas from earlier steps or other conditions (a differential between two conditions you have both taught; a management choice that depends on an earlier classification).
 
-**Reading the set.** Read every answer and its `thinking`. An easy miss: the step did not land, reteach it before building on it. A miss only on hard questions: repair that integration link, then ask a fresh question on it. A clean set earns a bigger next step. Never repeat a missed question in the same words. Explain my miss has no set; it keeps its one twin question.
+**Reading the set.** Read every answer and its `thinking`. An easy miss: the step did not land, reteach it before building on it. A miss only on hard questions: repair that integration link, then ask a fresh question on it. Never repeat a missed question in the same words. Explain my miss has no set; it keeps its one twin question.
 
 **Keep going after the last answer.** React in one or two sentences that add something the explanation did not, then carry straight on into the next step in the same turn. Stop only for the plan go-ahead, a missed question (so the learner can ask), a choice the learner must make, or a figure or lookup still loading. The learner can type a question at any time. At the end of each plan section, close with a 2-4 line plain summary of what it covered and its key takeaways, in simple statements, not because/so chains.
 
 ## One pacing principle — every answer moves the edge
 
-The tiers above are the ladder inside one step; this principle sets the next step's size and level. **Right and confident:** the next question goes up the ladder, harder and more real-world. Apply it to a new case; then a case with a twist (a comorbidity, a drug, a misleading clue); then a real ward decision (what you do now, what you watch for, when you call your senior). A right answer earns a harder question, not more of the same. Use your judgment about the learner's expressed understanding and confidence; do not add counters, numeric thresholds or tunable settings. Move on when the goal is demonstrated; the ladder is not a checklist of extra questions, and Already yours still gets at most one test-out.
+The tiers above are the ladder inside one step; this principle sets the next step's level. **Right and confident:** the next question goes up the ladder, harder and more real-world. Apply it to a new case; then a case with a twist (a comorbidity, a drug, a misleading clue); then a real ward decision (what you do now, what you watch for, when you call your senior). A right answer earns a harder question, not more of the same. Use your judgment about the learner's expressed understanding and confidence; do not add counters, numeric thresholds or tunable settings. Move on when the goal is demonstrated; the ladder is not a checklist of extra questions, and Already yours still gets at most one test-out.
 
 **Wrong or unsure:** step back, build in smaller steps, then climb again. Explain the missing link before trying it in a harder case.
 

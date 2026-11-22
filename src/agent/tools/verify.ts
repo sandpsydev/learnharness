@@ -4,6 +4,7 @@ import { invalidInputResult, serverExecute } from "../tool-execute.ts";
 import { VERIFY_LIMITS, verifyPromptProblems, type VerifyItem } from "../../core/contracts.ts";
 import type { VerifyStore } from "../../core/ports.ts";
 import type { SearchStatus } from "../../core/search.ts";
+import { expertAiLimitNote, type EvidenceBudget } from "../evidence-budget.ts";
 
 /**
  * The teacher's evidence-routing tools (medical fork, spec "Evidence
@@ -31,6 +32,9 @@ export interface VerifyToolContext {
 	/** When the browser extension last called the local API (ISO), or null
 	 *  if it never has this run. */
 	extensionLastSeen: () => string | null;
+	/** The teacher's per-learner-message Expert AI allowance (evidence-budget.ts).
+	 *  Absent = unlimited (bare test contexts). */
+	evidence?: EvidenceBudget;
 }
 
 const queueInput = Type.Object({
@@ -96,12 +100,22 @@ export function verifyTools(ctx: VerifyToolContext): Record<string, AgentTool<an
 	const runQueue = serverExecute("verify_queue", Type.Unsafe<Screened>({}), (screened: Screened) => {
 		const existing = () => ctx.verifyStore.listItems({ chatId: ctx.chatId });
 		if (screened.listOnly) return { queue: existing().map(line) };
-		const added = ctx.verifyStore.addItems(ctx.chatId, screened.accepted);
+		// Over the per-learner-message allowance: queue only what is allowed
+		// (the first questions, in order) and say plainly what was not.
+		const granted = ctx.evidence ? ctx.evidence.claimQuestions(screened.accepted.length) : screened.accepted.length;
+		const overLimit = screened.accepted.slice(granted);
+		const added = granted > 0 ? ctx.verifyStore.addItems(ctx.chatId, screened.accepted.slice(0, granted)) : [];
 		return {
 			queued: added.map(line),
+			...(overLimit.length > 0
+				? {
+						notQueued: overLimit.map((q) => (q.prompt.length > 80 ? `${q.prompt.slice(0, 80)}…` : q.prompt)),
+						limit: expertAiLimitNote(added.length, overLimit.length),
+					}
+				: {}),
 			...(screened.rejected.length > 0 ? { rejected: screened.rejected } : {}),
 			queue: existing().filter((i) => i.status === "queued" || i.status === "asked").map(line),
-			reminder: PROVISIONAL_REMINDER,
+			...(added.length > 0 ? { reminder: PROVISIONAL_REMINDER } : {}),
 		};
 	}) as NonNullable<AgentTool<any>["execute"]>;
 	return {

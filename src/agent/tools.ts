@@ -22,6 +22,7 @@ import { proberGraphTools } from "./tools/graph.ts";
 import { libraryTools, type LibraryToolContext } from "./tools/library.ts";
 import { literatureTools } from "./tools/literature.ts";
 import { verifyTools, type VerifyToolContext } from "./tools/verify.ts";
+import type { EvidenceBudget } from "./evidence-budget.ts";
 import { readTool } from "./tools/read.ts";
 import { lsTool } from "./tools/ls.ts";
 import { findTool } from "./tools/find.ts";
@@ -434,6 +435,10 @@ export interface TeacherToolContext extends PlanToolContext {
 	 *  single-best-answer, so a miss session always holds the multiple-
 	 *  choice `quiz`, even when the learner's setting arms free recall. */
 	missFlow?: boolean;
+	/** Per-learner-message allowance for research jobs and Expert AI
+	 *  questions (evidence-budget.ts). The teacher agent seeds it from the
+	 *  saved transcript; absent = unlimited (bare test contexts). */
+	evidence?: EvidenceBudget;
 }
 
 /**
@@ -492,14 +497,14 @@ export function createTeacherTools(
 			find: findTool,
 			grep: grepTool,
 			...planTools(ctx),
-			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
+			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable, evidence: ctx.evidence }),
 			// The learner's own books (slides, textbooks, SlideScribe notes).
 			...(ctx.library ? libraryTools(ctx.library) : {}),
 			// Evidence routing (medical fork): primary-evidence lookups are
 			// keyless and always on; the Expert AI queue + source report need
 			// the composition root's wiring.
 			...literatureTools,
-			...(ctx.verify ? verifyTools({ chatId: ctx.chatId, ...ctx.verify }) : {}),
+			...(ctx.verify ? verifyTools({ chatId: ctx.chatId, ...ctx.verify, evidence: ctx.evidence }) : {}),
 		},
 		withoutMechanics(enabled),
 		),

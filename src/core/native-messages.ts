@@ -177,6 +177,41 @@ export function newMessageId(): string {
 	return `msg_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
 }
 
+// ─── steer markers: one id, one place in the record ──────────────────────────
+
+/** The markers the app delivers on its own (a finished background job, an
+ *  abort notice, the probe handoff). Each has a deterministic id — one per
+ *  job (`steer_<jobId>`) or per chat — so the SAME id appearing twice in a
+ *  record is one delivery recorded twice, never two events. */
+export const STEER_MARKER_TYPES: readonly string[] = ["probe-handoff", "subagent-steer", "subagent-abort"];
+
+export function isSteerMarker(message: { role?: string; customType?: string }): boolean {
+	return message.role === "custom" && STEER_MARKER_TYPES.includes(message.customType ?? "");
+}
+
+/** The record with every repeat of a steer marker's id removed: the FIRST
+ *  one stays, wherever it sits (even inside a span compaction already
+ *  summarised — a later copy must not bring a result back that the summary
+ *  or the kept tail already carries). Saved chats are never rewritten; this
+ *  is how an old chat that already holds copies reads, shows and replays
+ *  each result once. Returns the same array when nothing repeats. */
+export function dropRepeatedSteers<T extends { id?: string; role?: string; customType?: string }>(messages: readonly T[]): readonly T[] {
+	let seen: Set<string> | undefined;
+	let kept: T[] | undefined;
+	for (let i = 0; i < messages.length; i++) {
+		const message = messages[i]!;
+		if (!isSteerMarker(message) || !message.id) { kept?.push(message); continue; }
+		seen ??= new Set<string>();
+		if (seen.has(message.id)) {
+			kept ??= messages.slice(0, i);
+			continue;
+		}
+		seen.add(message.id);
+		kept?.push(message);
+	}
+	return kept ?? messages;
+}
+
 // ─── constructors (the input-event → native append mapping lives in
 //     core/input-events.ts; steers in core/contracts/jobs.ts) ─────────────────
 
@@ -630,6 +665,9 @@ export function toLlmMessages(messages: readonly AgentMessage[]): Message[] {
 	// in the retained tail are then skipped, including older summaries
 	// whose stored positions still lie after the cut. A cut naming a
 	// missing id degrades honestly (everything renders — never throw).
+	// A steer id that repeats in the record (an old chat saved before the
+	// duplicate guard) reaches the model once, at its first place.
+	messages = dropRepeatedSteers(messages as readonly LhMessage[]) as readonly AgentMessage[];
 	const lhMessages = messages as readonly LhMessage[];
 	const active = activeCompactionOf(lhMessages);
 	let start = 0;

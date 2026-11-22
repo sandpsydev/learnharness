@@ -18,7 +18,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type { LhMessage } from "../core/native-messages.ts";
-import { newMessageId } from "../core/native-messages.ts";
+import { isSteerMarker, newMessageId } from "../core/native-messages.ts";
 import { QUESTION_TOOLS } from "../core/pending.ts";
 import { planBlocksFor } from "../core/plan-blocks.ts";
 import { coverageOf } from "../core/coverage.ts";
@@ -67,8 +67,18 @@ export function persistTurn(
 		const record = chatStore.getChat(chatId);
 		if (!record) throw new Error(`Chat not found: ${chatId}`);
 		const stamped: LhMessage[] = [];
+		// A steer marker's id is its delivery: the record holds it once. A run
+		// that carried a marker the record already has (another run saved it
+		// first, or compaction since kept or summarised it) must not add it
+		// again - the copy would reach the teacher a second time.
+		const savedSteers = new Set<string>();
+		for (const saved of record.messages) if (isSteerMarker(saved)) savedSteers.add(saved.id);
 		for (const m of turnMessages.slice(baseCount)) {
 			const message = m as LhMessage;
+			if (isSteerMarker(message) && message.id) {
+				if (savedSteers.has(message.id)) continue;
+				savedSteers.add(message.id);
+			}
 			// The placeholder question result: loop device, never a record fact.
 			if (
 				(message as { role?: string }).role === "toolResult" &&

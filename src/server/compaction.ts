@@ -238,7 +238,12 @@ async function compact(deps: CompactionDeps, chatId: string): Promise<void> {
 			at: new Date().toISOString(),
 		};
 		const marker = newCompactionMarker(trimmed, details);
-		deps.chatStore.saveMessages(chatId, [...messages, marker]);
+		// The marker joins the record as it is NOW. The summary took a while to write; a
+		// message saved meanwhile (a background result, a staged wake) must not be
+		// overwritten by the copy read before it. The cut names its first kept
+		// message by id, so later messages do not move it.
+		const current = deps.chatStore.getChat(chatId)?.messages ?? messages;
+		deps.chatStore.saveMessages(chatId, [...current, marker]);
 		// The money channel: the summary is a real model call on the
 		// session's own engine — its usage keys to the marker (provenance:
 		// the transcript shows the compaction divider at the marker).

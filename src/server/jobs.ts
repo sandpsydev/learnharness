@@ -261,9 +261,13 @@ function handOffEligible(chatId: string, agent: Agent): void {
 	// foreground batch without express account consent. Learner steers below
 	// remain deliverable, including the first poll of an answer run.
 	if (automaticFollowUpAllowed(chatId, agent) && queue && queue.length > 0) {
+		const held = new Set((agent.state?.messages ?? []).map((m) => (m as { id?: string }).id));
 		for (const entry of queue) {
 			if (!entry.waking && !entry.deferred && entry.handedTo !== agent && entry.steer.customType !== "probe-handoff") {
-				agent.steer(entry.steer);
+				// A marker already in this run's history reached the model once; steering
+				// it in again would show it twice. Only the owner of the record ends the
+				// delivery (settlement), so the entry still counts as this run's.
+				if (!held.has(entry.steer.id)) agent.steer(entry.steer);
 				entry.handedTo = agent;
 			}
 		}

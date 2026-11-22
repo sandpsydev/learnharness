@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
 import { serverExecute, type ImageFileResult } from "../tool-execute.ts";
@@ -15,6 +15,8 @@ import {
 	type FigureImageMime,
 } from "../../core/figures.ts";
 import { citationFor } from "../../core/library.ts";
+import { describeShownCard, figureNumberOfCaption, findRepeat } from "../../core/figure-duplicates.ts";
+import type { FigureCardRef } from "../../core/figure-refs.ts";
 import { fetchFigureImage } from "../figures/fetch.ts";
 import { findCachedFigure, figureKey, readCachedFigure, writeCachedFigure } from "../figures/cache.ts";
 import { cropVerticalBand } from "../image-processing/crop.ts";
@@ -45,6 +47,13 @@ import { runSubagent } from "./pi-run.ts";
  * becomes a link. Its licence plays no part (owner decision 2026-11-18,
  * personal study): a licence that was read goes in the credit line, and the
  * credit line is always kept.
+ *
+ * Two more rules are held in code (owner request 2026-11-22):
+ *  - a picture the chat already shows is never returned again (the run is told
+ *    which cards the chat shows; see core/figure-duplicates.ts for what counts as the same);
+ *  - a library picture is not accepted while the web has not been tried when the
+ *    finder itself says it is doubtful or lacks something the tutor asked for. It is held
+ *    back once; the web sources are searched; the held picture is the fallback.
  */
 
 export interface FigureFinderEnv {
@@ -60,6 +69,9 @@ export interface FigureFinderEnv {
 	fetchImpl?: typeof fetch;
 }
 
+/** The figure cards the chat already shows. */
+export type ShownFigures = () => FigureCardRef[];
+
 export interface FigureFinderOptions {
 	engine?: PiEngine;
 	env: FigureFinderEnv;
@@ -67,6 +79,9 @@ export interface FigureFinderOptions {
 	onUsage?: (usage: Usage) => void;
 	onActivity?: (line: string) => void;
 	maxTurns?: number;
+	/** The figure cards the chat already shows (read at each check, so a card that lands mid-run counts). A picture
+	 *  that repeats one of them is never returned. Absent = nothing is known to be shown. */
+	shown?: ShownFigures;
 }
 
 /** Page-image resolution for a lecture slide: sharp enough to read, light enough to keep. */
@@ -135,7 +150,7 @@ class Registry {
 	}
 }
 
-function describe(c: Candidate): string {
+function describe(c: Candidate, note?: (c: Candidate) => string | null): string {
 	const reuse =
 		c.kind === "slide"
 			? "the learner's own slide"
@@ -146,10 +161,27 @@ function describe(c: Candidate): string {
 					: "a picture";
 	const lines = [`${c.id} | ${c.title} | ${c.sourceName} | ${reuse}`];
 	if (c.description) lines.push(`   ${c.description}`);
+	const extra = note?.(c);
+	if (extra) lines.push(`   ${extra}`);
 	return lines.join("\n");
 }
 
-const listOf = (cs: Candidate[], empty: string): string => (cs.length === 0 ? empty : cs.map(describe).join("\n"));
+const listOf = (cs: Candidate[], empty: string, note?: (c: Candidate) => string | null): string =>
+	cs.length === 0 ? empty : cs.map((c) => describe(c, note)).join("\n");
+
+/** The state one finder run carries between its tools. */
+interface RunState {
+	/** A web source (Commons, Europe PMC, a site search) has been searched in this run. */
+	webTried: boolean;
+	/** Library pictures held back once already: a second show_image on one of them goes through. */
+	heldBack: Set<string>;
+	/** The partial library picture to fall back on when the web finds nothing better. */
+	partial: ShowArgs | null;
+	/** Candidates the finder tried to return that the chat already shows. */
+	repeats: Set<string>;
+	/** The card the closest picture repeats, when the best the library has is already shown. */
+	closest: FigureCardRef | null;
+}
 
 // ─── the tools ───────────────────────────────────────────────────────────────
 
@@ -188,6 +220,7 @@ const linksInput = Type.Object({
 	reason: Type.String({ minLength: 1, description: "Why no image is shown (the site blocks downloads, or not sure it matches)." }),
 });
 const nothingInput = Type.Object({ reason: Type.String({ minLength: 1, description: "What you tried and why nothing fit." }) });
+type ShowArgs = Static<typeof showInput>;
 
 const oneLine = (text: string, max: number): string => {
 	const t = text.replace(/\s+/g, " ").trim();
@@ -199,9 +232,25 @@ function createFigureTools(
 	input: FigureToolInput,
 	signalOf: () => AbortSignal | undefined,
 	registry: Registry,
-	decide: (d: Decision) => void,
+	decideRaw: (d: Decision) => void,
 	resizeOptions: () => import("../image-processing/index.ts").ProcessImageOptions["resizeOptions"],
-): Record<string, AgentTool<any>> {
+	shownCards: ShownFigures,
+): { tools: Record<string, AgentTool<any>>; settle: () => Promise<void> } {
+	const state: RunState = { webTried: false, heldBack: new Set(), partial: null, repeats: new Set(), closest: null };
+	/** Every result goes through here: when the best the library had was already shown, any result without a picture says so. */
+	const decide = (d: Decision): void =>
+		decideRaw(
+			state.closest && d.result.outcome !== "image"
+				? { result: { ...d.result, brief: `${d.result.brief}\n${closestNote(state.closest)}` } }
+				: d,
+		);
+	/** The line under a library page in a search result when the chat already shows a picture from it. */
+	const shownOnPage = (c: Candidate): string | null => {
+		if (c.kind !== "slide") return null;
+		const cards = shownCards().filter((card) => card.image.tier === "slides" && card.image.title === c.title);
+		if (cards.length === 0) return null;
+		return `Already shown in this chat from this page: ${cards.map((card) => oneLine(card.result.caption, 140)).join(" | ")}. Do not return that figure again; a different figure on the same page is fine.`;
+	};
 	const sourceEnv = () => ({ fetchImpl: env.fetchImpl, signal: signalOf() });
 	const failureText = (what: string, f: { reason: string; message: string }): string =>
 		`${what} failed (${f.reason}): ${f.message}${f.reason === "blocked" ? " This site does not allow automated downloads: offer its page as a link instead." : ""}`;
@@ -214,6 +263,7 @@ function createFigureTools(
 			`${c.id}: ${c.title} — ${c.sourceName}`,
 			c.kind === "slide" ? "The learner's own lecture slide." : c.licence ? `Licence: ${c.licence.label}.` : "",
 			c.description ? `Source description: ${c.description}` : "",
+			shownOnPage(c) ?? "",
 			processed.ok ? "Look at the picture below, then decide." : processed.message,
 		].filter(Boolean);
 		return { text: facts.join("\n"), ...(processed.ok ? { images: [{ data: processed.data, mimeType: processed.mimeType }] } : {}) };
@@ -257,7 +307,106 @@ function createFigureTools(
 		return showToModel(c, { file: cached.file, mime: cached.mime }, cached.bytes);
 	}
 
-	return {
+	/** The picture the finder wants to return, after the code's own checks. The string is what the finder is told. */
+	async function showCandidate(args: ShowArgs, settling: boolean): Promise<string> {
+		const c = registry.get(args.id);
+		if (!c) return `No candidate ${args.id}.`;
+		const viewed = registry.viewed.get(c.id);
+		if (!viewed) return `Look at ${c.id} first: a picture is shown only after you have seen it.`;
+		const shows = oneLine(args.shows, 400);
+		const keyFeature = oneLine(args.key_feature, 300);
+		const notShown = args.not_shown?.trim() ? oneLine(args.not_shown, 300) : undefined;
+		const library = c.kind === "slide";
+		const shownAsLink = (why: string): string => {
+			if (!c.pageUrl) {
+				decide({ result: noneResult(input, `${c.title} may be relevant, but ${why}, so it is not shown. Tell the learner where to look: ${c.title}.`) });
+				return "Recorded: not shown; nothing to link.";
+			}
+			decide({ result: linkResult(input, [{ title: c.title, url: c.pageUrl, source: c.sourceName, note: oneLine(`${shows} Look for: ${keyFeature}`, 240) }], why) });
+			return `Recorded as a link (${why}).`;
+		};
+		/** A library picture the finder doubts, or says lacks something asked for, is held back once so the web is tried first. */
+		const holdBack = (lacks: string): string | null => {
+			if (!library || settling || state.webTried || state.heldBack.has(c.id)) return null;
+			state.heldBack.add(c.id);
+			state.partial = args;
+			return [
+				`Not shown yet: ${c.title} is a picture from the learner's own library and the web sources have not been tried. The tutor asked for: ${input.concept}.`,
+				lacks,
+				"If what is missing is the main thing the tutor asked for, find a picture that shows it first: commons_search, europepmc_search or site_search, then look at the best candidates and show the one that does.",
+				"If you find nothing better, call show_image for this picture again (or nothing_found) and it is shown as the closest match, with what it lacks said plainly.",
+				"If what is missing is only a minor detail, call show_image again now with the same arguments.",
+			].join("\n");
+		};
+		if (!args.confident) {
+			return holdBack("You said you are not sure it shows the concept.") ?? shownAsLink("the finder was not confident the picture matches the concept");
+		}
+		const source = library ? null : figureSourceById(c.sourceId);
+		if (!library && !source) return shownAsLink("this picture is not from a listed source");
+		// A library page: show only the band holding the figure, when the finder gave one.
+		const range = library && c.slide && args.crop ? bandRange(args.crop) : null;
+		let shown: Viewed = viewed;
+		if (range && c.slide) {
+			const band = await figureBand(env, c.slide, viewed, range);
+			if (band) shown = band;
+		}
+		// A picture the chat already shows is never sent again.
+		const repeat = findRepeat(shownCards(), {
+			file: shown.file,
+			library,
+			title: c.title,
+			crop: shown === viewed ? null : range,
+			number: figureNumberOfCaption(shows, keyFeature),
+		});
+		if (repeat) {
+			state.closest = repeat;
+			if (state.repeats.has(c.id)) {
+				decide({ result: noneResult(input, "nothing better than a picture the chat already shows was found.") });
+				return "Recorded: not shown (the chat already shows this picture).";
+			}
+			state.repeats.add(c.id);
+			return [
+				`Not shown: this picture is already shown in this chat (${describeShownCard(repeat)}). Do not return it again.`,
+				"Look for a different picture: another figure or page of the library, then the web sources (commons_search, europepmc_search, site_search).",
+				"If nothing better turns up, call give_links with pages worth opening, or nothing_found: the lesson is told that the picture already shown is the closest.",
+			].join("\n");
+		}
+		if (notShown) {
+			const held = holdBack(`It lacks: ${notShown}`);
+			if (held) return held;
+		}
+		const image: FigureImage = {
+			file: shown.file,
+			mime: shown.mime,
+			tier: c.tier as FigureImage["tier"],
+			source: c.sourceName,
+			...(c.pageUrl ? { sourceUrl: c.pageUrl } : {}),
+			title: c.title,
+			credit: library ? `From your library: ${c.slide?.bookTitle ?? c.title}` : candidateCredit(c),
+			// A page of a textbook in the library is the learner's copy of someone else's book,
+			// not their lecture material: only slide decks are labelled as their own.
+			licence: library ? (c.sourceName === LECTURE_SLIDES ? "Your own lecture material" : "Your library copy (personal study)") : (c.licence?.label ?? ""),
+			...(c.licence?.url ? { licenceUrl: c.licence.url } : {}),
+			...(range && shown !== viewed ? { crop: range } : {}),
+		};
+		decide({ result: imageResult(input, image, shows, keyFeature, notShown) });
+		return "Recorded: the picture will be shown in the lesson.";
+	}
+
+	/** Show the held-back library picture as the closest match (the web found nothing better). */
+	async function settlePartial(): Promise<void> {
+		const held = state.partial;
+		state.partial = null;
+		if (held) await showCandidate(held, true);
+	}
+
+	/** The run ended with no decision: the held-back library picture, else an honest "only the repeat". */
+	async function settle(): Promise<void> {
+		if (state.partial) await settlePartial();
+		else if (state.closest) decide({ result: noneResult(input, "nothing better than a picture the chat already shows was found.") });
+	}
+
+	const tools: Record<string, AgentTool<any>> = {
 		slides_search: {
 			name: "slides_search",
 			label: "slides_search",
@@ -280,7 +429,7 @@ function createFigureTools(
 							slide: { bookId: h.book.id, bookTitle: h.book.title, page: h.chunk.page },
 						}),
 					);
-				return listOf(slides, `No slide or page matches "${query}". Go on to the next source.`);
+				return listOf(slides, `No slide or page matches "${query}". Go on to the next source.`, shownOnPage);
 			}),
 		},
 
@@ -290,6 +439,7 @@ function createFigureTools(
 			description: "Search Wikimedia Commons for pictures (anatomy, histology, clinical photos, imaging, ECG). Each result carries its own licence.",
 			parameters: queryInput,
 			execute: serverExecute("commons_search", queryInput, async ({ query }): Promise<string> => {
+				state.webTried = true;
 				const out = await searchCommons(query, sourceEnv());
 				if (!out.ok) return failureText("Wikimedia Commons search", out);
 				return listOf(out.candidates.map((d) => registry.add(d)), `Commons has no picture file for "${query}".`);
@@ -302,6 +452,7 @@ function createFigureTools(
 			description: "Search open-access journal articles (Europe PMC). Returns article candidates with their licence; use europepmc_figures to list an article's figures.",
 			parameters: queryInput,
 			execute: serverExecute("europepmc_search", queryInput, async ({ query }): Promise<string> => {
+				state.webTried = true;
 				const out = await searchEuropePmc(query, sourceEnv());
 				if (!out.ok) return failureText("Europe PMC search", out);
 				return listOf(out.candidates.map((d) => registry.add(d)), `No open-access article found for "${query}".`);
@@ -331,6 +482,7 @@ function createFigureTools(
 				`Sources: ${FIGURE_SOURCES.filter((s) => SITE_SOURCES.includes(s.id)).map((s) => `${s.id} (${s.covers})`).join("; ")}.`,
 			parameters: siteInput,
 			execute: serverExecute("site_search", siteInput, async ({ source: sourceId, query }): Promise<string> => {
+				state.webTried = true;
 				const source = figureSourceById(sourceId);
 				if (!source) return `Unknown source ${sourceId}.`;
 				const provider = env.search?.() ?? null;
@@ -401,47 +553,7 @@ function createFigureTools(
 			label: "show_image",
 			description: "FINISH: show the picture you looked at in the lesson, with your caption and the key feature. Only when you are confident it matches.",
 			parameters: showInput,
-			execute: serverExecute("show_image", showInput, async (args): Promise<string> => {
-				const c = registry.get(args.id);
-				if (!c) return `No candidate ${args.id}.`;
-				const viewed = registry.viewed.get(c.id);
-				if (!viewed) return `Look at ${c.id} first: a picture is shown only after you have seen it.`;
-				const shows = oneLine(args.shows, 400);
-				const keyFeature = oneLine(args.key_feature, 300);
-				const notShown = args.not_shown?.trim() ? oneLine(args.not_shown, 300) : undefined;
-				const shownAsLink = (why: string): string => {
-					if (!c.pageUrl) {
-						decide({ result: noneResult(input, `${c.title} may be relevant, but ${why}, so it is not shown. Tell the learner where to look: ${c.title}.`) });
-						return "Recorded: not shown; nothing to link.";
-					}
-					decide({ result: linkResult(input, [{ title: c.title, url: c.pageUrl, source: c.sourceName, note: oneLine(`${shows} Look for: ${keyFeature}`, 240) }], why) });
-					return `Recorded as a link (${why}).`;
-				};
-				if (!args.confident) return shownAsLink("the finder was not confident the picture matches the concept");
-				const source = c.kind === "slide" ? null : figureSourceById(c.sourceId);
-				if (c.kind !== "slide" && !source) return shownAsLink("this picture is not from a listed source");
-				// A library page: show only the band holding the figure, when the finder gave one.
-				let shown: Viewed = viewed;
-				if (c.kind === "slide" && c.slide && args.crop) {
-					const band = await figureBand(env, c.slide, viewed, args.crop);
-					if (band) shown = band;
-				}
-				const image: FigureImage = {
-					file: shown.file,
-					mime: shown.mime,
-					tier: c.tier as FigureImage["tier"],
-					source: c.sourceName,
-					...(c.pageUrl ? { sourceUrl: c.pageUrl } : {}),
-					title: c.title,
-					credit: c.kind === "slide" ? `From your library: ${c.slide?.bookTitle ?? c.title}` : candidateCredit(c),
-					// A page of a textbook in the library is the learner's copy of someone else's book,
-					// not their lecture material: only slide decks are labelled as their own.
-					licence: c.kind === "slide" ? (c.sourceName === LECTURE_SLIDES ? "Your own lecture material" : "Your library copy (personal study)") : (c.licence?.label ?? ""),
-					...(c.licence?.url ? { licenceUrl: c.licence.url } : {}),
-				};
-				decide({ result: imageResult(input, image, shows, keyFeature, notShown) });
-				return "Recorded: the picture will be shown in the lesson.";
-			}),
+			execute: serverExecute("show_image", showInput, (args): Promise<string> => showCandidate(args, false)),
 		},
 
 		give_links: {
@@ -466,12 +578,26 @@ function createFigureTools(
 			label: "nothing_found",
 			description: "FINISH: nothing usable was found.",
 			parameters: nothingInput,
-			execute: serverExecute("nothing_found", nothingInput, ({ reason }): string => {
+			execute: serverExecute("nothing_found", nothingInput, async ({ reason }): Promise<string> => {
+				// A partial library picture held back earlier is the fallback: "nothing better" means it is shown after all.
+				if (state.partial) {
+					await settlePartial();
+					return "Recorded.";
+				}
 				decide({ result: noneResult(input, oneLine(reason, 300)) });
 				return "Recorded.";
 			}),
 		},
 	};
+	return { tools, settle };
+}
+
+/** The band of a library page to show for the finder's crop (margin added), or null = show the whole page. */
+function bandRange(crop: { top: number; bottom: number }): { top: number; bottom: number } | null {
+	const top = Math.max(0, Math.min(crop.top, crop.bottom) - CROP_MARGIN);
+	const bottom = Math.min(1, Math.max(crop.top, crop.bottom) + CROP_MARGIN);
+	if (bottom - top < CROP_MIN_SPAN || (top === 0 && bottom === 1)) return null;
+	return { top: Number(top.toFixed(3)), bottom: Number(bottom.toFixed(3)) };
 }
 
 /** The cropped band of a rendered library page, cached beside the page. Null = show the whole page. */
@@ -479,11 +605,9 @@ async function figureBand(
 	env: FigureFinderEnv,
 	slide: { bookId: string; page: number },
 	page: Viewed,
-	crop: { top: number; bottom: number },
+	range: { top: number; bottom: number },
 ): Promise<Viewed | null> {
-	const top = Math.max(0, Math.min(crop.top, crop.bottom) - CROP_MARGIN);
-	const bottom = Math.min(1, Math.max(crop.top, crop.bottom) + CROP_MARGIN);
-	if (bottom - top < CROP_MIN_SPAN || (top === 0 && bottom === 1)) return null;
+	const { top, bottom } = range;
 	const key = figureKey("slide-band", slide.bookId, slide.page, SLIDE_DPI, top.toFixed(3), bottom.toFixed(3));
 	const cached = findCachedFigure(env.cacheRoot, env.chatId, key);
 	if (cached) return { file: cached.file, mime: cached.mime };
@@ -493,6 +617,11 @@ async function figureBand(
 	if (!band) return null;
 	const written = writeCachedFigure(env.cacheRoot, env.chatId, key, "image/png", band);
 	return { file: written.file, mime: written.mime };
+}
+
+/** What the lesson is told when the best picture found is one the chat already shows. */
+function closestNote(card: FigureCardRef): string {
+	return `The closest picture found is one already shown earlier in this chat (${describeShownCard(card)}). It is not sent again: point the learner back to that card, and cover in words what it lacks.`;
 }
 
 // ─── results (the wording the tutor reads is set here, not by the model) ──────
@@ -559,18 +688,18 @@ export async function runFigureFinder(input: FigureToolInput, opts: FigureFinder
 	const registry = new Registry();
 	let decision: Decision | null = null;
 	const engine = opts.engine;
-	const tools = Object.values(
-		createFigureTools(
-			opts.env,
-			input,
-			() => opts.abortSignal,
-			registry,
-			(d) => {
-				decision ??= d;
-			},
-			() => engine?.model.inputLimits?.images?.resize,
-		),
+	const { tools: toolSet, settle } = createFigureTools(
+		opts.env,
+		input,
+		() => opts.abortSignal,
+		registry,
+		(d) => {
+			decision ??= d;
+		},
+		() => engine?.model.inputLimits?.images?.resize,
+		() => opts.shown?.() ?? [],
 	);
+	const tools = Object.values(toolSet);
 	const prompt = [
 		`Concept to show: ${input.concept}`,
 		input.modality ? `Kind of picture: ${input.modality}` : null,
@@ -591,6 +720,8 @@ export async function runFigureFinder(input: FigureToolInput, opts: FigureFinder
 		onToolStart: (toolName, args) => opts.onActivity?.(activityLine(toolName, args)),
 		chatId: opts.env.chatId,
 	});
+	// No decision (out of steps, or the model just stopped): a held-back library picture still goes to the lesson.
+	if (decision === null) await settle();
 	return (decision as Decision | null)?.result ?? noneResult(input, "the search ended without a decision.");
 }
 

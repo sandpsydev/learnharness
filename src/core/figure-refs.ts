@@ -77,6 +77,12 @@ export function parseFigureNumber(raw: string): FigureNumber | null {
 const FIG_IN_TEXT = new RegExp(String.raw`\bFig(?:ure)?s?\.?\s*(${NUMBER})`, "i");
 const PANEL_IN_TEXT = /\bpanel\s+([A-H])(?![A-Za-z])/i;
 
+/** The first figure number a text names ("Sabiston Fig. 35.1: …" → 35.1), or null. */
+export function figureNumberIn(text: string): FigureNumber | null {
+	const fig = FIG_IN_TEXT.exec(text);
+	return fig ? parseFigureNumber(fig[1]!) : null;
+}
+
 /** Build the matcher's view of a delivered figure (null when it is not a shown picture). */
 export function cardRefOf(result: FigureResult | undefined, id: string): FigureCardRef | null {
 	const image = result?.image;

@@ -292,6 +292,10 @@ export interface FigureImage {
 	/** "CC BY-SA 4.0", "Public domain", or "Your lecture slides"; empty when no licence was read (the credit line still names the source and page). */
 	licence: string;
 	licenceUrl?: string;
+	/** A library page shown cropped: the band of the page the card shows (fractions of the page height,
+	 *  0 = top edge). Absent for a whole page, an outside picture, and cards saved before this field —
+	 *  the finder uses it to tell two figures of one page apart. */
+	crop?: { top: number; bottom: number };
 }
 
 export interface FigureResult {

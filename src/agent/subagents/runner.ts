@@ -21,6 +21,7 @@ import {
 	type VisualResult,
 	type VisualToolInput,
 } from "../../core/contracts.ts";
+import { cardRefOf, type FigureCardRef } from "../../core/figure-refs.ts";
 import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -570,6 +571,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 				abortSignal: loop.abortSignal,
 				onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
 				onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
+				// The pictures this chat already shows (every earlier figure job that ended with a picture):
+				// the finder never returns one of them again.
+				shown: () => shownFigureCards(job.chatId, jobId),
 			});
 			await finishJob(jobId, result);
 		} catch (err) {
@@ -578,6 +582,17 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
 			await finishJob(jobId, failedResult(figureInput, reason));
 		}
+	}
+
+	/** The figure cards of a chat, from its figure jobs (the one being run excluded). */
+	function shownFigureCards(chatId: string, exceptJobId: string): FigureCardRef[] {
+		const cards: FigureCardRef[] = [];
+		for (const other of jobStore.listJobs(chatId)) {
+			if (other.id === exceptJobId || other.kind !== "figure") continue;
+			const card = cardRefOf(other.result as FigureResult | undefined, other.id);
+			if (card) cards.push(card);
+		}
+		return cards;
 	}
 
 	return { runJob };

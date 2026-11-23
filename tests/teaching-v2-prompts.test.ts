@@ -42,6 +42,7 @@ describe("teaching v2 prompt rules", () => {
 			"which treatment for whom, and why",
 			"Teach the take-home message concisely",
 			"Do not cite trial names, PMIDs or trial statistics as evidence unless the learner asks for them",
+			"The learner sees only your visible messages, never your thinking. Teach a step in a visible message before you check it.",
 			"give the key takeaway behind its placement",
 		]) assert.ok(teacher.includes(text), text);
 		assert.equal(teacher.includes("explain the actual trial"), false);

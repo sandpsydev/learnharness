@@ -1,5 +1,5 @@
 import { Agent } from "@earendil-works/pi-agent-core";
-import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentEvent, AgentMessage, AgentTool, BeforeToolCallContext } from "@earendil-works/pi-agent-core";
 import { invalidInputResult, questionResult } from "./tool-execute.ts";
 import { providerEventObserver } from "./provider-events.ts";
 import type { Usage } from "@earendil-works/pi-ai";
@@ -7,6 +7,7 @@ import { PATHS } from "../../config.ts";
 import { APP_IDENTITY, piEngineFor, type PiEngine } from "./models.ts";
 import { effectivePromptSegments } from "./prompt-segments.ts";
 import { evidenceBudgetFor } from "./evidence-budget.ts";
+import { unseenStepNote } from "./visible-teaching.ts";
 import {
 	askUserQuestionTool,
 	createProberTools,
@@ -221,6 +222,18 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 		// Wave C registerLiveAgent-before-runPiTurn design depends on.
 		// undefined preserves normal scheduling (the old boolean false).
 		finishTurn: (turn) => (stopper(turn) ? { action: "end" } : undefined),
+		// Visible-teaching guard (visible-teaching.ts): the teacher's check on a
+		// step the learner was never shown is refused before it reaches them.
+		// The hook sees the whole transcript, including this turn's own text.
+		...(kind === "teacher"
+			? {
+					beforeToolCall: async ({ assistantMessage, toolCall, context }: BeforeToolCallContext) => {
+						const history = context.messages.filter((m) => m !== assistantMessage);
+						const note = unseenStepNote(history, assistantMessage, toolCall.id);
+						return note ? { block: true, reason: note } : undefined;
+					},
+				}
+			: {}),
 		// Wave C (2026-09-26, owner correction same day): markers handed to a
 		// live run drain from pi's STEERING queue — the lesson loop is one
 		// continuous teach→quiz→teach run, so delivery must inject at turn

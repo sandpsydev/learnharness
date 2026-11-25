@@ -72,6 +72,15 @@ const NO_STOP_REASON_MESSAGE = "claude CLI ended the message without a stop reas
 const NOT_SIGNED_IN_ERROR = "authentication_failed";
 const LEAKED_TOOL_CALL_MESSAGE = "The reply came back as raw tool text instead of a real tool call, so it was not shown. Send your message again to retry.";
 
+// Only transport/protocol failures with no newly admitted work are replayable.
+// Authentication, bridge identity/intent mismatches and arbitrary provider errors stay fatal.
+function canReplayFailure(message: string): boolean {
+	return message.startsWith("claude CLI emitted an unsupported native tool call")
+		|| message === "claude CLI refused a harness tool call before MCP admission"
+		|| message === "claude CLI moved on while harness tool calls were waiting for results"
+		|| message === "claude CLI moved on without admitting its harness tool calls";
+}
+
 export function toEffort(level: ThinkingLevel | undefined): AnthropicEffort {
 	return level ? EFFORTS[level] : "medium";
 }
@@ -287,7 +296,7 @@ class ClaudeTurn {
 
 			case "toolUse":
 				if (!block.name.startsWith(`mcp__${BRIDGE_SERVER_NAME}__`)) {
-					this.fail("claude CLI emitted an unsupported native tool call", "error");
+					this.fail(`claude CLI emitted an unsupported native tool call: ${block.name}`, "error");
 					return;
 				}
 				this.toolBlocks.set(index, { type: "toolCall", id: block.id, name: toolNameFromMcp(block.name), arguments: {} });
@@ -506,10 +515,11 @@ class ClaudeProcess implements LiveProcess {
 	}
 
 	fail(message: string): void {
-		// A parallel request can fail after the admitted slice was handed to
-		// Pi. Retain that failure for its continuation instead of silently
-		// replaying and hiding the compatibility error.
-		if (this.sessionId && this.turn.finished && this.toolCallIds.length > 0) this.pendingError = message;
+		// Once Pi owns a call, keep its result (including a learner's answer) in
+		// history and replay it on the next continuation. Do not poison that
+		// continuation with an error from a CLI that has already abandoned it.
+		// Bridge identity/intent failures still survive to the continuation.
+		if (this.sessionId && this.turn.finished && this.toolCallIds.length > 0 && !canReplayFailure(message)) this.pendingError = message;
 		this.turn.fail(message, "error");
 		this.kill();
 		if (this.pendingError) addLiveProcess(this);
@@ -639,7 +649,16 @@ function continueLiveProcess(turn: ClaudeTurn, owner: symbol, sessionId: string 
 function toClaudeEnv(): NodeJS.ProcessEnv {
 	// Preserve native CLI auth/routing, including launch-environment credentials.
 	// Claude Code chooses the account and billing method, not LearnHarness.
-	return { ...externalCliEnv(), MCP_TOOL_TIMEOUT: String(MCP_TOOL_TIMEOUT_MS) };
+	return {
+		...externalCliEnv(),
+		MCP_TOOL_TIMEOUT: String(MCP_TOOL_TIMEOUT_MS),
+		// HTTP MCP has a separate five-minute idle watchdog in Claude Code.
+		// The harness must retire the process first, then replay late answers.
+		CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: String(MCP_TOOL_TIMEOUT_MS),
+		// --tools "" does not disable the CLI's deferred MCP tool discovery.
+		// Offer the full bridge schema directly, with no native ToolSearch call.
+		ENABLE_TOOL_SEARCH: "false",
+	};
 }
 
 async function startProcess(
@@ -702,17 +721,49 @@ export function createClaudeCodeStreamFunction(runClaude: RunClaude): StreamFunc
 	const owner = Symbol("claude-code stream owner");
 	return (model, context, options) => {
 		const stream = createAssistantMessageEventStream();
-		const turn = new ClaudeTurn(stream, model);
-
+		// Pi updates its in-flight transcript while consuming our events. Keep
+		// the retry anchored to the request, especially its latest tool result.
+		context = { ...context, messages: context.messages.slice() };
 		const env = toClaudeEnv();
 		// An existing child must not retain stale authentication/routing after env changes.
 		const configuration = { request: configurationForReuse(model, context, toEffort(options?.reasoning)), env };
-		if (continueLiveProcess(turn, owner, options?.sessionId, configuration, context.messages, options?.signal)) return stream;
-
-		startProcess(runClaude, turn, model, context, options, owner, configuration, env).catch((error: unknown) => {
-			console.error("claude CLI turn failed:", error);
-			turn.fail(options?.signal?.aborted ? ABORT_MESSAGE : error instanceof ClaudeLaunchError ? error.message : START_FAILED_MESSAGE, options?.signal?.aborted ? "aborted" : "error");
-		});
+		void (async () => {
+			let started = false;
+			let previousUsage: AssistantMessage["usage"] | undefined;
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const attemptStream = createAssistantMessageEventStream();
+				const turn = new ClaudeTurn(attemptStream, model);
+				const continued = attempt === 0 && continueLiveProcess(turn, owner, options?.sessionId, configuration, context.messages, options?.signal);
+				if (!continued) {
+					void startProcess(runClaude, turn, model, context, options, owner, configuration, env).catch((error: unknown) => {
+						console.error("claude CLI turn failed:", error);
+						turn.fail(options?.signal?.aborted ? ABORT_MESSAGE : error instanceof ClaudeLaunchError ? error.message : START_FAILED_MESSAGE, options?.signal?.aborted ? "aborted" : "error");
+					});
+				}
+				for await (const event of attemptStream) {
+					if (event.type === "error" && attempt === 0 && !options?.signal?.aborted && canReplayFailure(event.error.errorMessage ?? "")) {
+						previousUsage = structuredClone(event.error.usage);
+						break;
+					}
+					// Pi's start event appends a history entry. A retry replaces the
+					// partial in that same slot instead of creating a second message.
+					if (event.type === "start") {
+						if (started) continue;
+						started = true;
+					}
+					if (event.type === "done" || event.type === "error") {
+						const message = event.type === "done" ? event.message : event.error;
+						if (previousUsage) {
+							for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) message.usage[key] += previousUsage[key];
+						}
+						stream.push(event);
+						stream.end();
+						return;
+					}
+					stream.push(event);
+				}
+			}
+		})();
 
 		return stream;
 	};

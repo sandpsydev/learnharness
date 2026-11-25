@@ -426,7 +426,7 @@ test("tool scenario ends with toolcall_end (Claude's tool_use id, unprefixed nam
 	assert.deepEqual(done.message.content, [toolCallEnd.toolCall]);
 });
 
-test("unsupported native tool intent fails without exposing executable calls", async (t) => {
+test("repeated unsupported native intent retries once, then fails without executable calls", async (t) => {
 	const { events } = await runScenario(t, [
 		streamEvent({ type: "message_start", message: { usage: {} } }),
 		streamEvent({
@@ -446,6 +446,73 @@ test("unsupported native tool intent fails without exposing executable calls", a
 
 	assert.equal(events.some((event) => event.type === "toolcall_end"), false);
 	assert.match(getErrorMessage(events) ?? "", /unsupported native tool/);
+});
+
+const deniedCall: ToolUse = { id: "toolu_rejected", name: "read", arguments: { path: "a" } };
+const refusedScenario = [
+	...toToolUseMessage([deniedCall]),
+	JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: deniedCall.id, is_error: true, content: "Permission denied" }] } }),
+	HOLD,
+];
+const nativeScenario = [
+	streamEvent({ type: "message_start", message: { usage: { input_tokens: 2 } } }),
+	streamEvent({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_search", name: "ToolSearch", input: {} } }),
+	HOLD,
+];
+
+for (const [kind, failure] of [
+	["native discovery", nativeScenario],
+	["refusal before admission", refusedScenario],
+	["moving on before admission", [...toToolUseMessage([deniedCall]), ...textScenario("premature reply"), HOLD]],
+] as const) test(`${kind} recovers once in the same message with the original learner answer`, async (t) => {
+	const stdinDir = mkdtempSync(join(tmpdir(), "claude-retry-input-"));
+	t.after(() => rmSync(stdinDir, { recursive: true, force: true }));
+	const firstInput = join(stdinDir, "first.jsonl");
+	const retryInput = join(stdinDir, "retry.jsonl");
+	const broken = createFakeRun(t, [...failure], { FAKE_CLAUDE_STDIN: firstInput });
+	const fresh = createFakeRun(t, textScenario("Your answer was received."), { FAKE_CLAUDE_STDIN: retryInput });
+	const stream = createClaudeCodeStreamFunction((args, options) => (broken.calls.length ? fresh : broken).runClaude(args, options));
+	const answer: Message = { role: "user", content: "My latest answer is B, because it carries bytes.", timestamp: 0 };
+	const events = await collectEvents(stream(getModel(), normalizeContext({ systemPrompt: "You are a tutor.", messages: [HI, answer], tools: [READ_TOOL] })));
+	const done = getLastEvent(events);
+	assert.ok(done.type === "done");
+	assert.equal(getText(done.message), "Your answer was received.");
+	assert.equal(events.filter((event) => event.type === "start").length, 1);
+	assert.equal(events.filter((event) => event.type === "error" || event.type === "toolcall_end").length, 0);
+	const prompts = (file: string) => readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((line) => line.type === "user");
+	assert.deepEqual(prompts(firstInput), prompts(retryInput));
+	assert.ok(JSON.stringify(prompts(retryInput)).includes("My latest answer is B"));
+	assert.equal(done.message.usage.input, kind === "native discovery" ? 3 : 1);
+	await Promise.all([...broken.calls, ...fresh.calls].map(assertCleanedUp));
+});
+
+test("retry inside the native Pi loop replaces partial text without persisting a failed or duplicate message", async (t) => {
+	const broken = createFakeRun(t, [
+		...textScenario("discarded partial").slice(0, 4),
+		streamEvent({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_native", name: "Glob", input: {} } }), HOLD,
+	]);
+	const fresh = createFakeRun(t, textScenario("Recovered lesson"));
+	const agent = new Agent({ initialState: { model: getModel() }, streamFn: createClaudeCodeStreamFunction((args, options) => (broken.calls.length ? fresh : broken).runClaude(args, options)) });
+	await agent.prompt("My answer is B");
+	const assistants = agent.state.messages.filter((message) => message.role === "assistant");
+	assert.equal(assistants.length, 1);
+	assert.equal(getText(assistants[0]!), "Recovered lesson");
+	assert.equal(assistants[0]!.stopReason, "stop");
+	await Promise.all([...broken.calls, ...fresh.calls].map(assertCleanedUp));
+});
+
+test("aborting the first failed attempt prevents an automatic retry", async (t) => {
+	const controller = new AbortController();
+	const broken = createFakeRun(t, [JSON.stringify({ fake: "checkpoint" }), JSON.stringify({ fake: "wait-for-message" }), ...nativeScenario]);
+	const stream = createClaudeCodeStreamFunction(async (args, options) => {
+		const child = await broken.runClaude(args, options);
+		assert.ok(child);
+		void once(child, "message").then(() => controller.abort());
+		return child;
+	});
+	const events = await collectEvents(stream(getModel(), normalizeContext({ messages: [HI] }), { signal: controller.signal }));
+	assert.match(getErrorMessage(events) ?? "", /aborted/);
+	await assertCleanedUp(getOnlyCall(broken.calls));
 });
 
 test("usage maps input/output/cacheRead/cacheWrite with zero cost, message_delta overriding message_start", async (t) => {
@@ -614,6 +681,8 @@ test("spawns with the model alias, effort, bridge tools, MCP_TOOL_TIMEOUT and th
 	assert.equal(getFlagValue(call.args, "--effort"), "xhigh");
 	assert.equal(getFlagValue(call.args, "--allowedTools"), "mcp__learnharness__read,mcp__learnharness__get_weather");
 	assert.equal(call.env.MCP_TOOL_TIMEOUT, "1800000");
+	assert.equal(call.env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT, "1800000");
+	assert.equal(call.env.ENABLE_TOOL_SEARCH, "false");
 	assert.equal(call.env.HOME, process.env.HOME);
 	assert.equal(call.env.CLAUDE_CONFIG_DIR, process.env.CLAUDE_CONFIG_DIR);
 });
@@ -747,13 +816,14 @@ test("user message after tool results starts fresh with unfinished calls in the 
 	assert.ok(stdin.includes("wait, explain sockets first"), stdin);
 });
 
-test("output while waiting for tool results kills the process", async (t) => {
+test("repeated output before admission retries once then kills both processes", async (t) => {
 	const readA: ToolUse = { id: "toolu_moved_on_a", name: "read", arguments: { path: "a" } };
 	const { runClaude, calls } = createFakeRun(t, [...toToolUseMessage([readA]), REPLY, HOLD]);
 	const events = await collectEvents(createClaudeCodeStreamFunction(runClaude)(getModel(), normalizeContext({ messages: [HI], tools: [READ_TOOL] })));
 	assert.match(getErrorMessage(events) ?? "", /moved on without admitting/);
 	assert.equal(events.some((event) => event.type === "toolcall_end"), false);
-	await assertCleanedUp(getOnlyCall(calls));
+	assert.equal(calls.length, 2);
+	await Promise.all(calls.map(assertCleanedUp));
 });
 
 test("unadmitted tool intent never becomes an executable call", async (t) => {
@@ -785,7 +855,8 @@ test("a CLI-rejected malformed call is not exposed for execution", async (t) => 
 	const events = await collectEvents(createClaudeCodeStreamFunction(runClaude)(getModel(), normalizeContext({ messages: [HI], tools: [READ_TOOL] })));
 	assert.equal(events.some((event) => event.type === "toolcall_end"), false);
 	assert.match(getErrorMessage(events) ?? "", /refused.*before MCP admission/);
-	await assertCleanedUp(getOnlyCall(calls));
+	assert.equal(calls.length, 2);
+	await Promise.all(calls.map(assertCleanedUp));
 });
 
 test("abort while waiting kills the process and closes the bridge", async (t) => {
@@ -876,7 +947,8 @@ test("CLI denial cannot execute a tool in the native Pi loop", async (t) => {
 	assert.ok(last?.role === "assistant");
 	assert.equal(last.stopReason, "error");
 	assert.match(last.errorMessage ?? "", /refused.*before MCP admission/);
-	await assertCleanedUp(getOnlyCall(calls));
+	assert.equal(calls.length, 2);
+	await Promise.all(calls.map(assertCleanedUp));
 });
 
 test("pre-aborted requests do not spawn a process", async () => {
@@ -915,19 +987,24 @@ test("a parallel identity failure after an admitted slice is reported on continu
 	await assertCleanedUp(getOnlyCall(calls));
 });
 
-test("output after MCP admission fails continuation instead of silently replaying", async (t) => {
+test("output after MCP admission retires the CLI and replays the answer on continuation", async (t) => {
 	const call: ToolUse = { id: "toolu_moved_on", name: "read", arguments: { path: "a" } };
 	const { runClaude, calls } = createFakeRun(t, [...toToolUseMessage([call]),
 		JSON.stringify({ fake: "start-call", id: call.id, name: call.name, arguments: call.arguments }),
 		JSON.stringify({ fake: "wait-for-message" }), ...toToolUseMessage([call]), HOLD]);
-	const stream = createClaudeCodeStreamFunction(runClaude);
+	const stdinFile = join(mkdtempSync(join(tmpdir(), "claude-code-recovery-")), "stdin.jsonl");
+	t.after(() => rmSync(dirname(stdinFile), { recursive: true, force: true }));
+	const fresh = createFakeRun(t, textScenario("Answer received"), { FAKE_CLAUDE_STDIN: stdinFile });
+	const stream = createClaudeCodeStreamFunction((args, options) => (calls.length === 0 ? runClaude : fresh.runClaude)(args, options));
 	const message = await runTurn(stream, [HI]);
 	getOnlyCall(calls).child.send("continue");
 	await waitForExit(getOnlyCall(calls).child);
-	const events = await collectEvents(stream(getModel(), normalizeContext({ systemPrompt: "You are a tutor.", messages: [HI, message, toToolResult(call, "A")], tools: [READ_TOOL] }), { sessionId: SESSION_ID }));
-	assert.match(getErrorMessage(events) ?? "", /moved on while.*waiting for results/);
-	assert.equal(calls.length, 1);
+	const reply = await runTurn(stream, [HI, message, toToolResult(call, "learner answer A")]);
+	assert.equal(getText(reply), "Answer received");
+	assert.ok(readFileSync(stdinFile, "utf8").includes("learner answer A"));
+	assert.equal(fresh.calls.length, 1);
 	await assertCleanedUp(getOnlyCall(calls));
+	await assertCleanedUp(getOnlyCall(fresh.calls));
 });
 
 test("normal completion escalates termination when the child ignores SIGTERM", async (t) => {

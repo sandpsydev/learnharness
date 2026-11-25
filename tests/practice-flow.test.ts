@@ -136,7 +136,7 @@ describe("practice flow (scripted model)", () => {
 		const chat = createPracticeChat("Test: practice groups");
 		const { engine, calls } = scripted([
 			// Turn 1: the agent poses immediately (terminate:true ends the run).
-			() => fauxAssistantMessage([fauxToolCall("problem", POSE, { id: "call-p1" })], { stopReason: "toolUse" }),
+			() => fauxAssistantMessage([fauxText("In a finite group, a subgroup has order dividing the group order. A prime has no divisors besides one and itself."), fauxToolCall("problem", POSE, { id: "call-p1" })], { stopReason: "toolUse" }),
 			// Turn 2 (after the commit): conclude (non-terminating) …
 			() => fauxAssistantMessage([fauxToolCall("conclude", CONCLUDE, { id: "call-c1" })], { stopReason: "toolUse" }),
 			// … the loop continues: reveal text ends the turn.
@@ -175,7 +175,7 @@ describe("practice flow (scripted model)", () => {
 	it("a working-trace submission keeps the problem active", async () => {
 		const chat = createPracticeChat("Test: practice nudge");
 		const { engine, calls } = scripted([
-			() => fauxAssistantMessage([fauxToolCall("problem", POSE, { id: "call-p2" })], { stopReason: "toolUse" }),
+			() => fauxAssistantMessage([fauxText("In a finite group, a subgroup has order dividing the group order. A prime has no divisors besides one and itself."), fauxToolCall("problem", POSE, { id: "call-p2" })], { stopReason: "toolUse" }),
 			() => fauxAssistantMessage([fauxText("R0: reread the subgroup constraint.")]),
 		]);
 		const factory = practiceFactory(chat.id, engine);
@@ -189,7 +189,7 @@ describe("practice flow (scripted model)", () => {
 	it("Esc dismissal marks silently; the next input rides the synthesized conclude pair", async () => {
 		const chat = createPracticeChat("Test: practice dismiss");
 		const { engine, calls } = scripted([
-			() => fauxAssistantMessage([fauxToolCall("problem", POSE, { id: "call-p3" })], { stopReason: "toolUse" }),
+			() => fauxAssistantMessage([fauxText("In a finite group, a subgroup has order dividing the group order. A prime has no divisors besides one and itself."), fauxToolCall("problem", POSE, { id: "call-p3" })], { stopReason: "toolUse" }),
 			() => fauxAssistantMessage([fauxText("Dropped. Something else, then.")]),
 		]);
 		const factory = practiceFactory(chat.id, engine);

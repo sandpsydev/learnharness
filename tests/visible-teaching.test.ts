@@ -1,12 +1,5 @@
-/**
- * Visible-teaching guard (medical fork): the teacher may not CHECK a step the
- * learner has not been taught. Refused: (a) a check right after the learner
- * answered a predict, and (b) a check on a different node than the previous
- * question, when nothing VISIBLE (a non-empty text block or send_to_user
- * message — never thinking) was taught since that answer.
- *
- * Fakes only — a scripted pi engine and a scripted fake Claude Code CLI; no
- * model, no web, no owner data.
+/** Reproductions use generic lessons, scripted pi responses and a fake CLI.
+ * No learner data, web access or live model calls.
  */
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -20,7 +13,7 @@ const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-visible-teaching-"));
 process.env.LH_DATA_DIR = TMP_DATA;
 after(() => fs.rmSync(TMP_DATA, { recursive: true, force: true }));
 
-const { GUARDED_QUESTION_TOOLS, REFUSED_QUESTION_TYPE, UNSEEN_STEP_NOTE, unseenStepNote } = await import("../src/agent/visible-teaching.ts");
+const { GUARDED_QUESTION_TOOLS, MAX_LESSON_REPAIR_REQUESTS, LESSON_REPAIR_FAILED_TEXT, UNSEEN_STEP_NOTE, unseenStepNote } = await import("../src/agent/visible-teaching.ts");
 const { createTeacherAgent, createProberAgent } = await import("../src/agent/teacher-agent.ts");
 const { createClaudeCodeStreamFunction } = await import("../src/agent/claude-code/stream.ts");
 const { CLAUDE_CODE_MODELS } = await import("../src/agent/claude-code/provider.ts");
@@ -50,13 +43,13 @@ const text = (t: string) => ({ type: "text", text: t });
 const call = (id: string, name: string, args: unknown) => ({ type: "toolCall", id, name, arguments: args });
 const quiz = (id: string, type: Type, nodeId: string) => call(id, "quiz", quizInput(type, nodeId));
 const sendToUser = (id: string, message: string) => call(id, "send_to_user", { message });
-const answer = (id: string, toolName = "quiz"): AgentMessage =>
+const answer = (id: string, toolName = "quiz", correct = true, dontKnow = false): AgentMessage =>
 	({
 		role: "toolResult",
 		toolCallId: id,
 		toolName,
 		content: [{ type: "text", text: "answered" }],
-		details: { kind: "quiz", questionText: "Which?", dontKnow: true, answers: [], answeredAt: "2026-11-23T00:00:00.000Z" },
+		details: { kind: "quiz", questionText: "Which?", dontKnow, correct, answers: [], answeredAt: "2026-11-23T00:00:00.000Z" },
 		isError: false,
 		timestamp: 3,
 	}) as never;
@@ -72,141 +65,82 @@ function decide(history: AgentMessage[], ...next: unknown[]): string | null {
 
 // ─── the rule, as a pure decision ────────────────────────────────────────────
 
-describe("the rule's limits", () => {
-	it("watches the quiz and its free-recall twin, and refuses only checks", () => {
-		assert.deepEqual([...GUARDED_QUESTION_TOOLS], ["quiz", "explain"]);
-		assert.equal(REFUSED_QUESTION_TYPE, "check");
+describe("visible lesson before every question", () => {
+	it("covers every question dock tool and the practice problem card", () => {
+		assert.deepEqual([...GUARDED_QUESTION_TOOLS], ["quiz", "probe", "ask_user_question", "explain", "recall", "problem"]);
+		for (const name of GUARDED_QUESTION_TOOLS) {
+			assert.equal(decide([user("teach me")], thinking(), call("q", name, {})), UNSEEN_STEP_NOTE, name);
+			assert.equal(decide([user("teach me")], text("A square's area is its side squared."), call("q", name, {})), null, name);
+		}
 	});
 
-	it("the refusal tells the teacher the learner has not seen the step, to teach visibly, then check", () => {
-		assert.match(UNSEEN_STEP_NOTE, /learner has not seen this step/);
-		assert.match(UNSEEN_STEP_NOTE, /never your thinking/);
-		assert.match(UNSEEN_STEP_NOTE, /Nothing was shown to the learner/);
-		assert.match(UNSEEN_STEP_NOTE, /Teach this step now in a visible message/);
-	});
-});
-
-describe("refused", () => {
-	it("(a) a check right after the learner answered a predict, with only thinking since", () => {
-		const history = [user("teach me"), assistant(quiz("p1", "predict", "thyroid")), answer("p1")];
-		assert.equal(decide(history, thinking(), call("f1", "figure", {}), quiz("c1", "check", "thyroid")), UNSEEN_STEP_NOTE);
+	it("refuses every quiz type, including absent type and node, without a lesson", () => {
+		for (const type of ["check", "predict", "probe", undefined]) {
+			assert.equal(decide([user("start")], call("q", "quiz", { type })), UNSEEN_STEP_NOTE);
+		}
 	});
 
-	it("(b) a check on a new node, with only thinking since the previous check's answer", () => {
-		const history = [user("teach me"), assistant(quiz("c0", "check", "invasion")), answer("c0")];
-		assert.equal(decide(history, thinking(), quiz("c1", "check", "grade")), UNSEEN_STEP_NOTE);
+	it("refuses the new-node and predict-to-check reproductions", () => {
+		for (const previous of [quiz("p", "predict", "area"), quiz("p", "check", "length")]) {
+			const history = [assistant(text("A square has four equal sides."), previous), answer("p")];
+			assert.equal(decide(history, thinking(), quiz("q", "check", "area")), UNSEEN_STEP_NOTE);
+		}
 	});
 
-	it("(b) also after a predict on another node", () => {
-		const history = [assistant(quiz("p1", "predict", "invasion")), answer("p1")];
-		assert.equal(decide(history, thinking(), quiz("c1", "check", "grade")), UNSEEN_STEP_NOTE);
+	it("refuses same-node retries after a wrong, unknown or ungraded answer", () => {
+		for (const result of [answer("p", "quiz", false), answer("p", "quiz", false, true), { ...answer("p"), details: {} } as AgentMessage]) {
+			assert.equal(decide([assistant(text("Area is side squared."), quiz("p", "check", "area")), result], quiz("q", "check", "area")), UNSEEN_STEP_NOTE);
+		}
 	});
 
-	it("empty or whitespace-only text is not teaching", () => {
-		const history = [assistant(quiz("c0", "check", "a")), answer("c0"), assistant(text("   "), text(""), thinking())];
-		assert.equal(decide(history, quiz("c1", "check", "b")), UNSEEN_STEP_NOTE);
+	it("allows consecutive same-node check-set follow-ups after correct answers to a taught step", () => {
+		const history = [assistant(text("Area is side squared."), quiz("p", "check", "area")), answer("p"), assistant(quiz("q", "check", "area")), answer("q")];
+		assert.equal(decide(history, quiz("r", "check", "area")), null);
+		assert.equal(decide([...history, user("new request")], quiz("r", "check", "area")), UNSEEN_STEP_NOTE);
+		assert.equal(decide([assistant(quiz("p", "check", "area")), answer("p")], quiz("q", "check", "area")), UNSEEN_STEP_NOTE);
 	});
 
-	it("an empty send_to_user message, or one whose call failed, is not teaching", () => {
-		const failed = [assistant(quiz("c0", "check", "a")), answer("c0"), assistant(sendToUser("s1", "A real explanation")), sent("s1", true)];
-		assert.equal(decide(failed, quiz("c1", "check", "b")), UNSEEN_STEP_NOTE);
-		const empty = [assistant(quiz("c0", "check", "a")), answer("c0")];
-		assert.equal(decide(empty, call("s2", "send_to_user", { message: "  " }), quiz("c1", "check", "b")), UNSEEN_STEP_NOTE);
+	it("a roadmap alone does not unlock the first warm-up, nor do correct probe answers unlock later warm-ups", () => {
+		const roadmap = "Your map already holds the earlier concepts. So I'm starting at application level. A few questions will show where the gaps are. Then I'll build a lesson from your slides.";
+		const history = [user("prepare for class"), assistant(sendToUser("s", roadmap)), sent("s")];
+		assert.equal(decide(history, call("p", "probe", quizInput("check", "area"))), UNSEEN_STEP_NOTE);
+		assert.equal(decide([...history, assistant(call("p", "probe", quizInput("check", "area"))), answer("p", "probe")], call("q", "probe", quizInput("check", "area"))), UNSEEN_STEP_NOTE);
 	});
 
-	it("teaching from BEFORE the previous answer does not count", () => {
-		const history = [assistant(text("The step, taught."), quiz("c0", "check", "a")), answer("c0")];
-		assert.equal(decide(history, quiz("c1", "check", "b")), UNSEEN_STEP_NOTE);
+	it("a broad node does not unlock a new numbered category that was only in thinking", () => {
+		const history = [assistant(text("The code describes the parcel's weight."), quiz("p", "check", "parcel")), answer("p")];
+		const numbered = { ...quizInput("check", "parcel"), options: [{ label: "P1: light", value: "a" }, { label: "P2: heavy", value: "b" }], correctAnswer: "b" };
+		assert.equal(decide(history, thinking("P2 means heavy."), call("q", "quiz", numbered)), UNSEEN_STEP_NOTE);
+		assert.equal(decide(history, text("P2 means heavy."), call("q", "quiz", numbered)), null);
 	});
 
-	it("text that only comes AFTER the check call does not make it taught", () => {
-		const history = [assistant(quiz("c0", "check", "a")), answer("c0")];
-		assert.equal(decide(history, quiz("c1", "check", "b"), text("teaching written after the question")), UNSEEN_STEP_NOTE);
+	it("ordinary text or send_to_user before the call unlocks a question, including a same-node repair", () => {
+		const history = [assistant(quiz("p", "check", "area")), answer("p", "quiz", false, true)];
+		assert.equal(decide(history, text("Area is side squared."), quiz("q", "check", "area")), null);
+		assert.equal(decide(history, sendToUser("s", "Area is side squared."), quiz("q", "check", "area")), null);
+		assert.equal(decide([...history, assistant(sendToUser("s", "Area is side squared.")), sent("s")], quiz("q", "check", "area")), null);
 	});
 
-	it("the free-recall twin (explain) is guarded the same way", () => {
-		const history = [assistant(call("p1", "explain", { ...quizInput("predict", "a") })), answer("p1", "explain")];
-		assert.equal(decide(history, call("e1", "explain", quizInput("check", "a"))), UNSEEN_STEP_NOTE);
-	});
-
-	it("a refused earlier attempt (error result) is not an answer and not teaching: the retry is judged on the real last answer", () => {
-		const refused = { ...answer("c1"), isError: true, details: {} } as AgentMessage;
-		const history = [assistant(quiz("c0", "check", "a")), answer("c0"), assistant(thinking(), quiz("c1", "check", "b")), refused];
-		assert.equal(decide(history, thinking(), quiz("c2", "check", "b")), UNSEEN_STEP_NOTE);
-	});
-});
-
-describe("allowed", () => {
-	it("the follow-up questions of a check set on the same node, with no text between", () => {
-		const history = [
-			assistant(text("The step."), quiz("c1", "check", "stage")),
-			answer("c1"),
-			assistant(quiz("c2", "check", "stage")),
-			answer("c2"),
-		];
-		assert.equal(decide(history, quiz("c3", "check", "stage")), null);
-	});
-
-	it("a predict question that opens a step, with no text since the last answer", () => {
-		const history = [assistant(quiz("c0", "check", "a")), answer("c0")];
-		assert.equal(decide(history, thinking(), quiz("p1", "predict", "b")), null);
-	});
-
-	it("a predict after a predict", () => {
-		const history = [assistant(quiz("p0", "predict", "a")), answer("p0")];
-		assert.equal(decide(history, quiz("p1", "predict", "b")), null);
-	});
-
-	it("the first question of the chat, and a check when nothing was answered yet", () => {
-		assert.equal(decide([user("teach me")], thinking(), quiz("c1", "check", "a")), null);
-	});
-
-	it("a check once ordinary text was taught since the predict's answer", () => {
-		const history = [assistant(quiz("p1", "predict", "a")), answer("p1"), assistant(text("Here is the step."))];
-		assert.equal(decide(history, quiz("c1", "check", "a")), null);
-	});
-
-	it("a check on a new node once text was taught since the previous answer", () => {
-		const history = [assistant(quiz("c0", "check", "a")), answer("c0"), assistant(text("Next step."))];
-		assert.equal(decide(history, quiz("c1", "check", "b")), null);
-	});
-
-	it("a check whose step is in the same message, before the call (text block)", () => {
-		const history = [assistant(quiz("c0", "check", "a")), answer("c0")];
-		assert.equal(decide(history, thinking(), text("The next step."), quiz("c1", "check", "b")), null);
-	});
-
-	it("a check whose step was sent through send_to_user, in an earlier message or earlier in the same one", () => {
-		const earlier = [assistant(quiz("c0", "check", "a")), answer("c0"), assistant(sendToUser("s1", "The next step."))];
-		assert.equal(decide(earlier, quiz("c1", "check", "b")), null);
-		const sameMessage = [assistant(quiz("c0", "check", "a")), answer("c0")];
-		assert.equal(decide(sameMessage, thinking(), sendToUser("s1", "The next step."), quiz("c1", "check", "b")), null);
-	});
-
-	it("a check right after a predict answer when the reveal was sent first", () => {
-		const history = [assistant(quiz("p1", "predict", "a")), answer("p1")];
-		assert.equal(decide(history, sendToUser("s1", "Here is why."), quiz("c1", "check", "a")), null);
-	});
-
-	it("a call with no type or no nodeId (nothing to judge) and tools that are not questions", () => {
-		const history = [assistant(quiz("c0", "check", "a")), answer("c0")];
-		assert.equal(decide(history, call("c1", "quiz", { ...quizInput("check", "b"), type: undefined })), null);
-		assert.equal(decide(history, call("c1", "quiz", { ...quizInput("check", "b"), nodeId: undefined })), null);
-		assert.equal(decide(history, call("c1", "ask_user_question", { question: "?" })), null);
-		assert.equal(decide(history, call("c1", "probe", { ...quizInput("check", "b") })), null);
+	it("thinking, empty output, failed delivery, old teaching and text after the call do not unlock it", () => {
+		const history = [assistant(text("Area is side squared."), quiz("p", "predict", "area")), answer("p")];
+		assert.equal(decide(history, thinking(), text("  "), quiz("q", "check", "area"), text("Area is side squared.")), UNSEEN_STEP_NOTE);
+		assert.equal(decide([...history, assistant(sendToUser("s", "Area is side squared.")), sent("s", true)], quiz("q", "check", "area")), UNSEEN_STEP_NOTE);
+		assert.equal(decide(history, call("r", "read", {})), null);
 	});
 });
 
 // ─── the real turn: a scripted teacher, what the learner is shown ────────────
 
+const proberContext = { chatId: "guard-test", chatStore: { getChat: () => null }, jobStore: {}, spawn: () => {} } as never;
+
 type Faux = ReturnType<typeof createFauxCore>;
 
 /** Run the teacher agent over `history` with scripted model responses. */
-async function runScripted(history: AgentMessage[], steps: FauxResponseStep[]) {
+async function runScripted(history: AgentMessage[], steps: FauxResponseStep[], prober = false) {
 	const faux: Faux = createFauxCore({});
 	faux.setResponses(steps);
 	const engine: PiEngine = { model: faux.getModel(), streamFn: faux.streamSimple };
-	const agent = createTeacherAgent(undefined, { engine, messages: history });
+	const agent = prober ? createProberAgent(proberContext, { engine, messages: history }) : createTeacherAgent(undefined, { engine, messages: history });
 	await agent.continue();
 	return { messages: agent.state.messages as AgentMessage[], remaining: faux.getPendingResponseCount() };
 }
@@ -222,17 +156,10 @@ const shownToLearner = (messages: AgentMessage[], id: string) => {
 const toolUse = { stopReason: "toolUse" } as const;
 
 describe("a scripted teacher turn (pi engine)", () => {
-	it("(a) answers a predict, then calls a check with no visible text: the check is refused, the teacher is told, and it can teach then check", async () => {
-		const history = [user("teach me thyroid"), assistant(quiz("p1", "predict", "thyroid")), answer("p1")];
-		const { messages, remaining } = await runScripted(history, [
-			fauxAssistantMessage([fauxThinking("the step, in my head"), fauxToolCall("quiz", quizInput("check", "thyroid"), { id: "c1" })], toolUse),
-			fauxAssistantMessage([fauxText("Here is the step, out loud."), fauxToolCall("quiz", quizInput("check", "thyroid"), { id: "c2" })], toolUse),
-		]);
-		assert.equal(shownToLearner(messages, "c1"), false, "the unseen-step check is not shown");
-		assert.equal(resultFor(messages, "c1")?.isError, true);
-		assert.equal(resultFor(messages, "c1")?.content[0]?.text, UNSEEN_STEP_NOTE);
-		assert.equal(shownToLearner(messages, "c2"), true, "after teaching visibly, the check is shown");
-		assert.equal(remaining, 0, "the teacher went on to its second attempt in the same turn");
+	it("a correct taught check-set continuation is still shown", async () => {
+		const history = [user("teach me"), assistant(text("Area is side squared."), quiz("c0", "check", "area")), answer("c0")];
+		const { messages } = await runScripted(history, [fauxAssistantMessage([fauxToolCall("quiz", quizInput("check", "area"), { id: "c1" })], toolUse)]);
+		assert.equal(shownToLearner(messages, "c1"), true);
 	});
 
 	it("(b) calls a check on a NEW node with no visible text since the previous quiz's answer: refused", async () => {
@@ -247,14 +174,15 @@ describe("a scripted teacher turn (pi engine)", () => {
 		assert.equal(shownToLearner(messages, "c2"), true);
 	});
 
-	it("the legitimate no-text quizzes still reach the learner: a check set's follow-up, and a predict that opens a step", async () => {
-		const setHistory = [user("teach me"), assistant(text("The step."), quiz("c1", "check", "stage")), answer("c1")];
-		const followUp = await runScripted(setHistory, [fauxAssistantMessage([fauxToolCall("quiz", quizInput("check", "stage"), { id: "c2" })], toolUse)]);
-		assert.equal(shownToLearner(followUp.messages, "c2"), true);
 
-		const predictHistory = [user("teach me"), assistant(text("The step."), quiz("c1", "check", "stage")), answer("c1")];
-		const predict = await runScripted(predictHistory, [fauxAssistantMessage([fauxThinking("next"), fauxToolCall("quiz", quizInput("predict", "next-node"), { id: "p2" })], toolUse)]);
-		assert.equal(shownToLearner(predict.messages, "p2"), true);
+	it("a wrong answer needs a visible repair even on the same node", async () => {
+		const history = [user("start"), assistant(text("Area is side squared."), quiz("p", "check", "area")), answer("p", "quiz", false)];
+		const { messages } = await runScripted(history, [
+			fauxAssistantMessage([fauxThinking("repair silently"), fauxToolCall("quiz", quizInput("check", "area"), { id: "q" })], toolUse),
+			fauxAssistantMessage([fauxText("Multiply the side by itself to find the area."), fauxToolCall("quiz", quizInput("check", "area"), { id: "r" })], toolUse),
+		]);
+		assert.equal(shownToLearner(messages, "q"), false);
+		assert.equal(shownToLearner(messages, "r"), true);
 	});
 
 	it("a check preceded by a text block in the same message is shown", async () => {
@@ -265,7 +193,27 @@ describe("a scripted teacher turn (pi engine)", () => {
 		assert.equal(shownToLearner(messages, "c1"), true);
 	});
 
-	it("the prober (probe quiz, no nodeId) is never guarded", () => {
+	it("bounds repeated refusals and a silent repair, leaving a visible fallback", async () => {
+		const steps = Array.from({ length: MAX_LESSON_REPAIR_REQUESTS + 1 }, (_, i) =>
+			fauxAssistantMessage([fauxToolCall("quiz", quizInput("check", "area"), { id: `q${i}` })], toolUse));
+		const { messages, remaining } = await runScripted([user("start")], steps);
+		assert.equal(remaining, 0);
+		assert.ok(messages.some((m) => m.role === "assistant" && m.content.some((b) => b.type === "text" && b.text === LESSON_REPAIR_FAILED_TEXT)));
+		for (let i = 0; i < steps.length; i++) assert.equal(shownToLearner(messages, `q${i}`), false);
+		const silent = await runScripted([user("start")], [steps[0]!, ...Array.from({ length: MAX_LESSON_REPAIR_REQUESTS }, () => fauxAssistantMessage([fauxThinking("private")]))]);
+		assert.ok(silent.messages.some((m) => m.role === "assistant" && m.content.some((b) => b.type === "text" && b.text === LESSON_REPAIR_FAILED_TEXT)));
+	});
+
+	it("the prober refuses a first warm-up and can teach then ask it", async () => {
+		const { messages } = await runScripted([user("start")], [
+			fauxAssistantMessage([fauxToolCall("probe", quizInput("check", "area"), { id: "p1" })], toolUse),
+			fauxAssistantMessage([fauxText("Area is side squared."), fauxToolCall("probe", quizInput("check", "area"), { id: "p2" })], toolUse),
+		], true);
+		assert.equal(shownToLearner(messages, "p1"), false);
+		assert.equal(shownToLearner(messages, "p2"), true);
+	});
+
+	it("the prober exposes its guarded warm-up tool", () => {
 		const agent = createProberAgent(
 			{ chatId: "c", chatStore: { getChat: () => null } as never, jobStore: {} as never, spawn: () => {} } as never,
 			{ engine: { model: createFauxCore({}).getModel(), streamFn: createFauxCore({}).streamSimple } },
@@ -327,12 +275,12 @@ function fakeRun(t: TestContext, scenarios: string[][]): { runClaude: RunClaude;
 	return run;
 }
 
-async function runClaudeCode(t: TestContext, history: AgentMessage[], scenarios: string[][]) {
+async function runClaudeCode(t: TestContext, history: AgentMessage[], scenarios: string[][], prober = false) {
 	const run = fakeRun(t, scenarios);
 	const model = CLAUDE_CODE_MODELS.find((m) => m.id === "sonnet");
 	assert.ok(model);
 	const engine: PiEngine = { model, streamFn: createClaudeCodeStreamFunction(run.runClaude) };
-	const agent = createTeacherAgent(undefined, { engine, messages: history });
+	const agent = prober ? createProberAgent(proberContext, { engine, messages: history }) : createTeacherAgent(undefined, { engine, messages: history });
 	await agent.continue();
 	return agent.state.messages as AgentMessage[];
 }
@@ -379,4 +327,30 @@ describe("the same turn through the Claude Code engine (fake CLI)", () => {
 		const messages = await runClaudeCode(t, history, [cliScenario([{ id: "toolu_c1", name: "quiz", input: quizInput("check", "stage") }])]);
 		assert.equal(shownToLearner(messages, "toolu_c1"), true);
 	});
+	it("bounds repeated refusals through Claude Code and prints a visible fallback", async (t) => {
+		const messages = await runClaudeCode(t, [user("start")], Array.from({ length: MAX_LESSON_REPAIR_REQUESTS + 1 }, (_, i) =>
+			cliScenario([{ id: `toolu_q${i}`, name: "quiz", input: quizInput("check", "area") }])));
+		assert.ok(messages.some((m) => m.role === "assistant" && m.content.some((b) => b.type === "text" && b.text === LESSON_REPAIR_FAILED_TEXT)));
+		for (let i = 0; i <= MAX_LESSON_REPAIR_REQUESTS; i++) assert.equal(shownToLearner(messages, `toolu_q${i}`), false);
+	});
+
+	it("the Claude prober refuses a first warm-up, then accepts a visibly taught one", async (t) => {
+		const messages = await runClaudeCode(t, [user("start")], [
+			cliScenario([{ id: "toolu_p1", name: "probe", input: quizInput("check", "area") }]),
+			cliScenario([{ id: "toolu_p2", name: "probe", input: quizInput("check", "area") }], "Area is side squared."),
+		], true);
+		assert.equal(shownToLearner(messages, "toolu_p1"), false);
+		assert.equal(shownToLearner(messages, "toolu_p2"), true);
+	});
+
+	it("a Claude same-node retry after don't-know must teach visibly first", async (t) => {
+		const history = [user("start"), assistant(text("Area is side squared."), quiz("p", "check", "area")), answer("p", "quiz", false, true)];
+		const messages = await runClaudeCode(t, history, [
+			cliScenario([{ id: "toolu_q", name: "quiz", input: quizInput("check", "area") }]),
+			cliScenario([{ id: "toolu_r", name: "quiz", input: quizInput("check", "area") }], "Multiply the side by itself to find the area."),
+		]);
+		assert.equal(shownToLearner(messages, "toolu_q"), false);
+		assert.equal(shownToLearner(messages, "toolu_r"), true);
+	});
+
 });

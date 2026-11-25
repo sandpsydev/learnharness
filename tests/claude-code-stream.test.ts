@@ -1081,3 +1081,46 @@ for (const sharedIdentity of [false, true]) test(`two concurrent stream owners k
 	assert.equal(one.calls.length, 1);
 	assert.equal(two.calls.length, 1);
 });
+
+for (const fixture of ["empty-thinking-lesson.jsonl", "summarized-thinking-lesson.jsonl"]) {
+	test(`raw CLI ${fixture}: thinking stays private and explanation precedes the admitted tool`, async (t) => {
+		const lines = readFixtureLines(fixture);
+		const expectedText = lines.map((line) => JSON.parse(line).event)
+			.filter((event) => event.delta?.type === "text_delta").map((event) => event.delta.text).join("");
+		const expectedThinking = lines.map((line) => JSON.parse(line).event)
+			.filter((event) => event.delta?.type === "thinking_delta").map((event) => event.delta.thinking).join("");
+		assert.ok(expectedText.length > 0);
+		assert.equal(expectedThinking.length > 0, fixture.startsWith("summarized"));
+		const { events } = await runScenario(t, [...lines,
+			callTool({ id: "toolu_geometry_ack", name: "read", arguments: { value: "done" } }), HOLD]);
+		const done = getLastEvent(events);
+		assert.equal(done.type, "done");
+		if (done.type !== "done") return;
+		assert.deepEqual(done.message.content.map((block) => block.type), ["thinking", "text", "toolCall"]);
+		assert.equal(done.message.content[0]?.type === "thinking" && done.message.content[0].thinking, expectedThinking);
+		assert.equal(done.message.content[1]?.type === "text" && done.message.content[1].text, expectedText);
+	});
+}
+
+test("two interleaved thinking blocks cannot absorb reply text, including a turn ending in error", async (t) => {
+	const scenario = [streamEvent({ type: "message_start", message: { usage: {} } })];
+	for (const [index, type, value] of [[0, "thinking", ""], [1, "text", "A square's area is its side squared."], [2, "thinking", "A summary that sounds like a reply."]] as const) {
+		scenario.push(streamEvent({ type: "content_block_start", index, content_block: { type, [type]: "" } }),
+			streamEvent({ type: "content_block_delta", index, delta: { type: `${type}_delta`, [type]: value } }),
+			streamEvent({ type: "content_block_stop", index }));
+	}
+	scenario.push(JSON.stringify({ type: "result", is_error: true, errors: ["Synthetic transport failure"] }));
+	const { events } = await runScenario(t, scenario);
+	const last = getLastEvent(events);
+	assert.equal(last.type, "error");
+	if (last.type !== "error") return;
+	assert.deepEqual(last.error.content, [
+		{ type: "thinking", thinking: "" },
+		{ type: "text", text: "A square's area is its side squared." },
+		{ type: "thinking", thinking: "A summary that sounds like a reply." },
+	]);
+	const { projectView } = await import("../src/core/view.ts");
+	const displayed = projectView([{ ...last.error, id: "failed-turn" }]).flatMap((message) => message.parts)
+		.filter((part) => part.type === "text").map((part) => part.text);
+	assert.deepEqual(displayed, ["A square's area is its side squared."]);
+});

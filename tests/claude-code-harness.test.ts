@@ -53,6 +53,9 @@ function streamEvent(event: object): string {
 function toAskScenario(): string[] {
 	return [
 		streamEvent({ type: "message_start", message: { usage: {} } }),
+		streamEvent({ type: "content_block_start", index: 2, content_block: { type: "text", text: "" } }),
+		streamEvent({ type: "content_block_delta", index: 2, delta: { type: "text_delta", text: "Sockets carry bytes between programs." } }),
+		streamEvent({ type: "content_block_stop", index: 2 }),
 		streamEvent({
 			type: "content_block_start",
 			index: 0,
@@ -229,11 +232,11 @@ test("a question answered before the idle timeout continues the waiting CLI proc
 	await waitForExit(waiting);
 });
 
-test("a question pauses later calls from the same CLI response until the learner answers", async (t) => {
+test("a question pauses later calls; an untaught next question is refused after the learner answers", async (t) => {
 	const secondId = "toolu_second_question";
 	const secondQuestion = "What do you want to learn next?";
 	const scenario = toAskScenario();
-	scenario.splice(4, 0,
+	scenario.splice(scenario.findIndex((line) => line.includes('"type":"message_delta"')), 0,
 		streamEvent({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: secondId, name: "mcp__learnharness__ask_user_question", input: {} } }),
 		streamEvent({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: JSON.stringify({ question: secondQuestion }) } }),
 		streamEvent({ type: "content_block_stop", index: 1 }),
@@ -246,14 +249,11 @@ test("a question pauses later calls from the same CLI response until the learner
 	assert.equal(danglingQuestionOf(chatStore.getChat(chatId)?.messages ?? [])?.toolCallId, ASK_ID);
 	assert.equal(JSON.stringify(chatStore.getChat(chatId)?.messages).includes(secondId), false, "unadmitted second question must not be posed or persisted");
 	await runChatTurn(chatId, toAnswerInput(), factory);
-	assert.equal(danglingQuestionOf(chatStore.getChat(chatId)?.messages ?? [])?.toolCallId, secondId);
-	await runChatTurn(chatId, {
-		type: "answer", toolCallId: secondId,
-		answer: { kind: "ask", questionText: secondQuestion, dontKnow: false, answers: [], text: "HTTP next", answeredAt: new Date().toISOString() },
-	}, factory);
+	assert.equal(danglingQuestionOf(chatStore.getChat(chatId)?.messages ?? []), null);
+	const refused = chatStore.getChat(chatId)?.messages.find((m) => m.role === "toolResult" && m.toolCallId === secondId);
+	assert.ok(refused?.role === "toolResult" && refused.isError, "a next question requires a new visible lesson after the answer");
 	assert.equal(fakeRun.children.length, 1);
 	assert.ok(getLastAssistantText(chatId).includes(ANSWER_TEXT));
-	assert.ok(getLastAssistantText(chatId).includes("HTTP next"));
 	await waitForExit(fakeRun.children[0]!);
 });
 
@@ -261,7 +261,7 @@ test("an individually cancelled MCP question queued behind a learner wait never 
 	const cancelledId = "toolu_cancelled_question";
 	const question = "This cancelled question must never be posed";
 	const scenario = toAskScenario();
-	scenario.splice(4, 0,
+	scenario.splice(scenario.findIndex((line) => line.includes('"type":"message_delta"')), 0,
 		streamEvent({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: cancelledId, name: "mcp__learnharness__ask_user_question", input: {} } }),
 		streamEvent({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: JSON.stringify({ question }) } }),
 		streamEvent({ type: "content_block_stop", index: 1 }),

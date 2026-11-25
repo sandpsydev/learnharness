@@ -1585,7 +1585,8 @@ describe("prompt composition", () => {
 		// chars; 8k is generous headroom. Composed total ≤ 72k chars (raised from 60k
 		// for the first-pass, check-set and medical-figure rules, then to 70k for the
 		// real-figure `figure` tool rules, then to 72k for the approved teaching-
-		// explanation and figure-request wording (E1–E4, Q1–Q3), 2026-11).
+		// explanation and figure-request wording (E1–E4, Q1–Q3), 2026-11, then to 73k
+		// for the teacher's who-the-learner-is fragment, 04-whoami.md, 2026-11-23).
 		//
 		// QA 2026-11-12: this loop used to read src/agent/prompts at the top level
 		// only, where nothing but README.md lives — every fragment is in a role
@@ -1608,7 +1609,7 @@ describe("prompt composition", () => {
 			const limit = OVER_8K[f] ?? 8_000;
 			assert.ok(body.length <= limit, `fragment ${f} is ${body.length} chars — over its ${limit} guard`);
 		}
-		assert.ok(composeInstructions("teacher").length <= 72_000, "composed system prompt over the 72k guard");
+		assert.ok(composeInstructions("teacher").length <= 73_000, "composed system prompt over the 73k guard");
 	});
 });
 

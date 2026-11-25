@@ -4,8 +4,9 @@ import { QUESTION_TOOLS } from "../core/pending.ts";
 import { failedOutputCallIds, sendToUserText, SEND_TO_USER_TOOL, type LhMessage } from "../core/native-messages.ts";
 import { stripModelValueDebris } from "../core/value-debris.ts";
 
-/** All learner question surfaces, including practice's problem card. */
-export const GUARDED_QUESTION_TOOLS: readonly string[] = [...QUESTION_TOOLS, "problem"];
+/** Assessment surfaces only: clarification/choice questions never need a lesson. */
+export const GUARDED_QUESTION_TOOLS: readonly string[] = ["quiz", "explain", "probe", "recall", "problem"];
+const ANSWER_TOOLS: readonly string[] = [...QUESTION_TOOLS, "problem"];
 export const MAX_LESSON_REPAIR_REQUESTS = 3;
 export const UNSEEN_STEP_NOTE =
 	"Question not shown: the learner has not seen this step. The learner only sees visible messages — never your thinking — " +
@@ -63,10 +64,10 @@ function coversAnswerLabels(lesson: string, args: unknown): boolean {
 	const answer = options.length
 		? resolveCorrect(input.correctAnswer, options).indices.map((i) => options[i - 1]?.label ?? "").join(" ")
 		: typeof input.correctAnswer === "string" ? input.correctAnswer : "";
-	// Named numbered categories are facts to teach, not new numeric values in
-	// a vignette. A broad node must not let an untaught subcategory slip through.
-	const labels = answer.match(/\b[A-Z][A-Za-z]*\d+[A-Za-z]*\b/gu) ?? [];
-	const taught = new Set(lesson.match(/\b[A-Z][A-Za-z]*\d+[A-Za-z]*\b/gu) ?? []);
+	// Short numbered category codes need teaching. Longer names containing
+	// digits are not category codes: a lesson can explain them in ordinary words.
+	const labels = answer.match(/\b[A-Z]\d+[a-z]*\b/gu) ?? [];
+	const taught = new Set(lesson.match(/\b[A-Z]\d+[a-z]*\b/gu) ?? []);
 	return labels.every((label) => taught.has(label));
 }
 
@@ -85,18 +86,40 @@ function visibleText(block: Block, failedOutputs: ReadonlySet<string>): string |
 	return undefined;
 }
 
+export type VisibleTeachingRefusal = "no-text" | "procedural-only" | "unseen-category-label" | "not-correct-same-node";
+export interface VisibleTeachingDecision {
+	reason: VisibleTeachingRefusal;
+	visibleWords: number;
+	explanatoryWords: number;
+	visibleWordsSinceAnswer: number;
+	explanatoryWordsSinceAnswer: number;
+}
+const words = (value: string) => value.match(/[\p{L}\p{N}]+(?:[’'-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
+
+/** An acknowledgement/test request continues the explanation already on screen.
+ * Substantive questions, topic changes and image/file inputs still reset it. */
+function continuesVisibleLesson(message: AgentMessage): boolean {
+	if (message.role !== "user") return false;
+	const content = message.content;
+	if (Array.isArray(content) && content.some((b) => b.type !== "text")) return false;
+	const value = (typeof content === "string" ? content : content.map((b) => b.type === "text" ? b.text : "").join(" "))
+		.toLowerCase().replace(/[—–,:;.!?]+/gu, " ").replace(/\s+/gu, " ").trim();
+	return /^(?:(?:ok(?:ay)?|opk|alright|got it|understood|yes|nice|i (?:get|understand|know) (?:it|this)|test me|quiz me|next|continue|go on|what(?:'s|’s| is) next)\s*)+$/u.test(value);
+}
+
 /**
  * One rule on every engine and agent: a question needs visible teaching since
- * the last learner input, except a correct same-node check-set continuation.
+ * the last substantive learner input, except a correct same-node check-set continuation.
+ * Simple acknowledgements/test requests retain the already visible explanation.
  * Only blocks BEFORE the call count. Thinking, tool results and failed output
  * calls never grant teaching credit. No question type or missing node bypasses
  * the rule. Historical answers carry check-set credit only if taught on screen.
  */
-export function unseenStepNote(
+export function unseenStepDecision(
 	history: readonly AgentMessage[],
 	assistant: { content: readonly Block[] },
 	callId: string,
-): string | null {
+): VisibleTeachingDecision | null {
 	const callAt = assistant.content.findIndex((b) => b.type === "toolCall" && b.id === callId);
 	const call = assistant.content[callAt];
 	if (!call || !GUARDED_QUESTION_TOOLS.includes(call.name ?? "")) return null;
@@ -105,11 +128,16 @@ export function unseenStepNote(
 	let last: Asked | undefined;
 	let visible = false;
 	let lesson = "";
+	let rawVisible = "";
+	let sinceAnswer = "";
+	let explanationSinceAnswer = "";
 	const scan = (block: Block) => {
 		const text = visibleText(block, failedOutputs);
 		const teaching = text ? lessonText(text) : "";
+		if (text) { rawVisible += `\n${text}`; sinceAnswer += `\n${text}`; }
+		if (teaching) explanationSinceAnswer += `\n${teaching}`;
 		if (teaching) { visible = true; lesson += `\n${teaching}`; }
-		if (block.type === "toolCall" && block.id && GUARDED_QUESTION_TOOLS.includes(block.name ?? "")) {
+		if (block.type === "toolCall" && block.id && ANSWER_TOOLS.includes(block.name ?? "")) {
 			const question = questionOf(block);
 			question.taught = (visible && coversAnswerLabels(lesson, question.arguments)) || continuesTaughtCheck(last, question);
 			question.lesson = visible ? lesson : last?.lesson ?? "";
@@ -120,19 +148,34 @@ export function unseenStepNote(
 		if (message.role === "assistant") {
 			for (const block of message.content as readonly Block[]) scan(block);
 		} else if (message.role === "user" || (message.role === "custom" && ["practice-thinking", "practice-next"].includes(message.customType))) {
-			visible = false;
-			lesson = "";
-			last = undefined;
+			if (!continuesVisibleLesson(message)) {
+				visible = false;
+				lesson = "";
+				rawVisible = "";
+				last = undefined;
+			}
 		} else if (message.role === "toolResult" && !message.isError && message.details != null) {
 			const question = asked.get(message.toolCallId);
-			if (question && GUARDED_QUESTION_TOOLS.includes(message.toolName)) {
+			if (question && ANSWER_TOOLS.includes(message.toolName)) {
 				const details = message.details as { correct?: unknown; dontKnow?: unknown; dismissed?: unknown };
 				last = { ...question, correct: details.correct === true && details.dontKnow !== true && details.dismissed !== true };
 				visible = false;
 				lesson = "";
+				rawVisible = "";
+				sinceAnswer = "";
+				explanationSinceAnswer = "";
 			}
 		}
 	}
 	for (const block of assistant.content.slice(0, callAt)) scan(block);
-	return (visible && coversAnswerLabels(lesson, call.arguments)) || continuesTaughtCheck(last, questionOf(call)) ? null : UNSEEN_STEP_NOTE;
+	const next = questionOf(call);
+	if ((visible && coversAnswerLabels(lesson, call.arguments)) || continuesTaughtCheck(last, next)) return null;
+	const reason: VisibleTeachingRefusal = visible ? "unseen-category-label" : rawVisible.trim() ? "procedural-only" :
+		last?.nodeId !== undefined && last.nodeId === next.nodeId && last.correct !== true ? "not-correct-same-node" : "no-text";
+	return { reason, visibleWords: words(rawVisible), explanatoryWords: words(lesson),
+		visibleWordsSinceAnswer: words(sinceAnswer), explanatoryWordsSinceAnswer: words(explanationSinceAnswer) };
+}
+
+export function unseenStepNote(history: readonly AgentMessage[], assistant: { content: readonly Block[] }, callId: string): string | null {
+	return unseenStepDecision(history, assistant, callId) ? UNSEEN_STEP_NOTE : null;
 }

@@ -232,7 +232,7 @@ test("a question answered before the idle timeout continues the waiting CLI proc
 	await waitForExit(waiting);
 });
 
-test("a question pauses later calls; an untaught next question is refused after the learner answers", async (t) => {
+test("a question pauses later calls; a later clarification needs no intervening lesson", async (t) => {
 	const secondId = "toolu_second_question";
 	const secondQuestion = "What do you want to learn next?";
 	const scenario = toAskScenario();
@@ -249,11 +249,14 @@ test("a question pauses later calls; an untaught next question is refused after 
 	assert.equal(danglingQuestionOf(chatStore.getChat(chatId)?.messages ?? [])?.toolCallId, ASK_ID);
 	assert.equal(JSON.stringify(chatStore.getChat(chatId)?.messages).includes(secondId), false, "unadmitted second question must not be posed or persisted");
 	await runChatTurn(chatId, toAnswerInput(), factory);
-	assert.equal(danglingQuestionOf(chatStore.getChat(chatId)?.messages ?? []), null);
-	const refused = chatStore.getChat(chatId)?.messages.find((m) => m.role === "toolResult" && m.toolCallId === secondId);
-	assert.ok(refused?.role === "toolResult" && refused.isError, "a next question requires a new visible lesson after the answer");
+	assert.equal(danglingQuestionOf(chatStore.getChat(chatId)?.messages ?? [])?.toolCallId, secondId);
+	await runChatTurn(chatId, {
+		type: "answer", toolCallId: secondId,
+		answer: { kind: "ask", questionText: secondQuestion, dontKnow: false, answers: [], text: "HTTP next", answeredAt: new Date().toISOString() },
+	}, factory);
 	assert.equal(fakeRun.children.length, 1);
 	assert.ok(getLastAssistantText(chatId).includes(ANSWER_TEXT));
+	assert.ok(getLastAssistantText(chatId).includes("HTTP next"));
 	await waitForExit(fakeRun.children[0]!);
 });
 

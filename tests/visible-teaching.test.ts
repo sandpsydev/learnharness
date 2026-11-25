@@ -13,7 +13,7 @@ const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-visible-teaching-"));
 process.env.LH_DATA_DIR = TMP_DATA;
 after(() => fs.rmSync(TMP_DATA, { recursive: true, force: true }));
 
-const { GUARDED_QUESTION_TOOLS, MAX_LESSON_REPAIR_REQUESTS, LESSON_REPAIR_FAILED_TEXT, UNSEEN_STEP_NOTE, unseenStepNote } = await import("../src/agent/visible-teaching.ts");
+const { GUARDED_QUESTION_TOOLS, MAX_LESSON_REPAIR_REQUESTS, LESSON_REPAIR_FAILED_TEXT, UNSEEN_STEP_NOTE, unseenStepNote, unseenStepDecision } = await import("../src/agent/visible-teaching.ts");
 const { createTeacherAgent, createProberAgent } = await import("../src/agent/teacher-agent.ts");
 const { createClaudeCodeStreamFunction } = await import("../src/agent/claude-code/stream.ts");
 const { CLAUDE_CODE_MODELS } = await import("../src/agent/claude-code/provider.ts");
@@ -66,12 +66,46 @@ function decide(history: AgentMessage[], ...next: unknown[]): string | null {
 // ─── the rule, as a pure decision ────────────────────────────────────────────
 
 describe("visible lesson before every question", () => {
-	it("covers every question dock tool and the practice problem card", () => {
-		assert.deepEqual([...GUARDED_QUESTION_TOOLS], ["quiz", "probe", "ask_user_question", "explain", "recall", "problem"]);
+	it("covers assessment tools and the practice problem card", () => {
+		assert.deepEqual([...GUARDED_QUESTION_TOOLS], ["quiz", "explain", "probe", "recall", "problem"]);
 		for (const name of GUARDED_QUESTION_TOOLS) {
 			assert.equal(decide([user("teach me")], thinking(), call("q", name, {})), UNSEEN_STEP_NOTE, name);
 			assert.equal(decide([user("teach me")], text("A square's area is its side squared."), call("q", name, {})), null, name);
 		}
+	});
+
+	it("clarifying and choice questions never require a lesson", () => {
+		assert.equal(decide([user("start")], call("ask", "ask_user_question", { question: "Do you have the slides?" })), null);
+		// Their answers are still learner input: earlier teaching cannot leak
+		// past the reply to a clarification into an unrelated assessment.
+		const history = [user("start"), assistant(text("Area is side squared."), call("ask", "ask_user_question", { question: "Which topic?" })), answer("ask", "ask_user_question")];
+		assert.equal(decide(history, quiz("q", "check", "new-topic")), UNSEEN_STEP_NOTE);
+	});
+
+	it("acknowledgements and explicit test requests retain teaching; new questions reset it", () => {
+		for (const message of ["OK", "Okay, next", "I know this — test me", "got it", "okay nice", "opk"]) {
+			assert.equal(decide([user("start"), assistant(text("Area is side squared.")), user(message)], quiz("q", "check", "area")), null, message);
+			assert.equal(decide([user("start"), user(message)], quiz("q", "check", "area")), UNSEEN_STEP_NOTE, message);
+		}
+		assert.equal(decide([assistant(text("Area is side squared.")), user("What is volume?")], quiz("q", "check", "volume")), UNSEEN_STEP_NOTE);
+	});
+
+	it("ordinary names with digits do not require a verbatim repeat of a taught concept", () => {
+		const input = { ...quizInput("check", "sensors"), correctAnswer: "a", options: [{ label: "Sensor7 is inactive", value: "a" }, { label: "Sensor7 is active", value: "b" }] };
+		assert.equal(decide([assistant(text("An inactive sensor produces no signal.")), user("test me")], call("q", "quiz", input)), null);
+	});
+
+	it("refusal diagnostics distinguish absent text, procedural text, unknown categories and a same-node miss", () => {
+		const decision = (history: AgentMessage[], ...content: unknown[]) => unseenStepDecision(history, { content } as never, "q");
+		assert.equal(decision([user("start")], quiz("q", "check", "area"))?.reason, "no-text");
+		assert.equal(decision([assistant(text("I'll ask a few questions."))], quiz("q", "check", "area"))?.reason, "procedural-only");
+		const category = { ...quizInput("check", "parcel"), options: [{ label: "P2", value: "a" }], correctAnswer: "a" };
+		assert.equal(decision([assistant(text("A parcel code identifies its weight."))], call("q", "quiz", category))?.reason, "unseen-category-label");
+		const history = [assistant(text("Area is side squared."), quiz("p", "check", "area")), answer("p", "quiz", false)];
+		assert.equal(decision(history, quiz("q", "check", "area"))?.reason, "not-correct-same-node");
+		const counted = decision([assistant(text("Four clear words here.")), user("new topic")], quiz("q", "check", "new"));
+		assert.equal(counted?.visibleWords, 0);
+		assert.equal(counted?.visibleWordsSinceAnswer, 4);
 	});
 
 	it("refuses every quiz type, including absent type and node, without a lesson", () => {
@@ -213,6 +247,13 @@ describe("a scripted teacher turn (pi engine)", () => {
 		assert.equal(shownToLearner(messages, "p2"), true);
 	});
 
+	it("pi shows a clarification without teaching and a taught check after OK", async () => {
+		const clarification = await runScripted([user("start")], [fauxAssistantMessage([fauxToolCall("ask_user_question", { question: "Do you have the slides?" }, { id: "ask" })], toolUse)]);
+		assert.equal(shownToLearner(clarification.messages, "ask"), true);
+		const check = await runScripted([assistant(text("Area is side squared.")), user("OK")], [fauxAssistantMessage([fauxToolCall("quiz", quizInput("check", "area"), { id: "q" })], toolUse)]);
+		assert.equal(shownToLearner(check.messages, "q"), true);
+	});
+
 	it("the prober exposes its guarded warm-up tool", () => {
 		const agent = createProberAgent(
 			{ chatId: "c", chatStore: { getChat: () => null } as never, jobStore: {} as never, spawn: () => {} } as never,
@@ -351,6 +392,13 @@ describe("the same turn through the Claude Code engine (fake CLI)", () => {
 		]);
 		assert.equal(shownToLearner(messages, "toolu_q"), false);
 		assert.equal(shownToLearner(messages, "toolu_r"), true);
+	});
+
+	it("Claude shows a clarification without teaching and a taught check after a test request", async (t) => {
+		const clarification = await runClaudeCode(t, [user("start")], [cliScenario([{ id: "toolu_ask", name: "ask_user_question", input: { question: "Do you have the slides?" } }])]);
+		assert.equal(shownToLearner(clarification, "toolu_ask"), true);
+		const messages = await runClaudeCode(t, [assistant(text("Area is side squared.")), user("I know this — test me")], [cliScenario([{ id: "toolu_q", name: "quiz", input: quizInput("check", "area") }])]);
+		assert.equal(shownToLearner(messages, "toolu_q"), true);
 	});
 
 });

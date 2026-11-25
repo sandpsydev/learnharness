@@ -7,7 +7,8 @@ import { PATHS } from "../../config.ts";
 import { APP_IDENTITY, piEngineFor, type PiEngine } from "./models.ts";
 import { effectivePromptSegments } from "./prompt-segments.ts";
 import { evidenceBudgetFor } from "./evidence-budget.ts";
-import { unseenStepNote } from "./visible-teaching.ts";
+import { unseenStepNote, UNSEEN_STEP_NOTE } from "./visible-teaching.ts";
+import { LessonRepair } from "./lesson-repair.ts";
 import {
 	askUserQuestionTool,
 	createProberTools,
@@ -23,7 +24,7 @@ import { createReadTool, readTool } from "./tools/read.ts";
 import { CLAUDE_CODE_PROVIDER } from "./claude-code/constants.ts";
 import { quizInputObject, quizInputProblems } from "../core/question-core.ts";
 import { QUESTION_TOOLS, type EnabledTools } from "../core/pending.ts";
-import { toLlmMessages, nativeInputCause, PRACTICE_PROBLEM_TOOL } from "../core/native-messages.ts";
+import { toLlmMessages, nativeInputCause, PRACTICE_PROBLEM_TOOL, userFacingTextOf, failedOutputCallIds, type LhMessage } from "../core/native-messages.ts";
 import type { ChatGPTRequestCycle } from "./chatgpt-request-cycle.ts";
 import { usageWasAdmitted } from "./subscription-request-cycle.ts";
 
@@ -185,6 +186,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 	// ("practice" is not a ModelRole) honest about that.
 	const engine = opts.engine ?? piEngineFor(kind as "prober" | "teacher");
 	const stopper = makeQuestionStopper(kind);
+	const lessonRepair = new LessonRepair();
 	const systemPrompt = opts.promptSwitches
 		? composeInstructions(kind, opts.promptSwitches)
 		: composedInstructions[kind]!;
@@ -214,26 +216,31 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 			],
 			messages: opts.messages ?? [],
 		},
-		streamFn: engine.streamFn,
+		streamFn: lessonRepair.wrap(engine.streamFn),
 		...(providerEvents ? { onProviderStreamEvent: providerEvents } : {}),
 		// 0.87.1: shouldStopAfterTurn → finishTurn. Same call point (after
 		// tool results attach, before turn_end) and `{ action: "end" }` still
 		// exits BEFORE the steering poll — the parked-marker stranding our
 		// Wave C registerLiveAgent-before-runPiTurn design depends on.
 		// undefined preserves normal scheduling (the old boolean false).
-		finishTurn: (turn) => (stopper(turn) ? { action: "end" } : undefined),
-		// Visible-teaching guard (visible-teaching.ts): the teacher's check on a
-		// step the learner was never shown is refused before it reaches them.
-		// The hook sees the whole transcript, including this turn's own text.
-		...(kind === "teacher"
-			? {
-					beforeToolCall: async ({ assistantMessage, toolCall, context }: BeforeToolCallContext) => {
-						const history = context.messages.filter((m) => m !== assistantMessage);
-						const note = unseenStepNote(history, assistantMessage, toolCall.id);
-						return note ? { block: true, reason: note } : undefined;
-					},
-				}
-			: {}),
+		finishTurn: (turn) => {
+			if (stopper(turn)) { lessonRepair.pending = false; return { action: "end" }; }
+			// Once output is delivered, ordinary work may continue without a
+			// repair cap on research or figures. A refused question in this
+			// batch still owes repair, even if it also carried unrelated text.
+			const refused = turn.toolResults.some((r) => r.isError && r.content.some((b) => b.type === "text" && b.text === UNSEEN_STEP_NOTE));
+			if (!refused && userFacingTextOf(turn.message.content, failedOutputCallIds(turn.context.messages as LhMessage[])).length > 0) {
+				lessonRepair.pending = false;
+			}
+			return lessonRepair.pending ? { action: "continue" } : undefined;
+		},
+		beforeToolCall: async ({ assistantMessage, toolCall, context }: BeforeToolCallContext) => {
+			const history = context.messages.filter((m) => m !== assistantMessage);
+			const note = unseenStepNote(history, assistantMessage, toolCall.id);
+			if (!note) return undefined;
+			lessonRepair.pending = true;
+			return { block: true, reason: note };
+		},
 		// Wave C (2026-09-26, owner correction same day): markers handed to a
 		// live run drain from pi's STEERING queue — the lesson loop is one
 		// continuous teach→quiz→teach run, so delivery must inject at turn
@@ -268,6 +275,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 			opts.requestCycle?.prepare(request);
 		},
 	});
+	agent.subscribe((event) => { if (event.type === "agent_start") lessonRepair.reset(); });
 	if (opts.onUsage) {
 		agent.subscribe((event: AgentEvent) => {
 			if (event.type === "message_end" && event.message.role === "assistant" && "usage" in event.message) {

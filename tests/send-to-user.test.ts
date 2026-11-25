@@ -261,20 +261,21 @@ describe("send_to_user native flow (offline)", () => {
 
 	for (const outputFirst of [true, false]) {
 		it(`output + practice problem stops after the pose (${outputFirst ? "output first" : "problem first"})`, async () => {
-			const output = outputCall("Try this practice problem.");
+			const output = outputCall("Adding two and two combines two pairs, giving four objects.");
 			const problem = fauxToolCall("problem", {
 				statement: "What is two plus two?", mode: "recall", modelSolution: "Four.",
 			}, { id: "problem-1" });
 			const { engine, faux } = scripted("anthropic", "claude-opus-5-5", [
 				fauxAssistantMessage(outputFirst ? [output, problem] : [problem, output], { stopReason: "toolUse" }),
-				fauxAssistantMessage("Premature continuation must not run."),
+				fauxAssistantMessage([fauxToolCall("problem", { statement: "What is two plus two?", mode: "recall", modelSolution: "Four." }, { id: "problem-retry" })], { stopReason: "toolUse" }),
 			]);
 			const agent = createPracticeAgent({ chatId, chatStore }, { engine });
 			await agent.prompt("Pose a synthetic problem.");
-			assert.equal(faux.state.callCount, 1, "wait for the learner after a successful mixed-batch pose");
+			assert.equal(faux.state.callCount, outputFirst ? 1 : 2, "an untaught pose must retry after the visible lesson");
 			const results = agent.state.messages.filter((m) => m.role === "toolResult");
-			assert.equal(results.length, 2);
-			assert.ok(results.every((m) => !m.isError));
+			assert.equal(results.length, outputFirst ? 2 : 3);
+			assert.equal(results.filter((m) => m.isError).length, outputFirst ? 0 : 1);
+			assert.ok(!results.at(-1)?.isError);
 		});
 	}
 
@@ -310,7 +311,7 @@ describe("send_to_user native flow (offline)", () => {
 					statement: "What is two plus two?", mode: "recall", modelSolution: "Four.",
 				}, { id: "good-problem" }),
 			], { stopReason: "toolUse" }),
-			fauxAssistantMessage("Premature continuation must not run."),
+			fauxAssistantMessage([fauxToolCall("problem", { statement: "What is two plus two?", mode: "recall", modelSolution: "Four." }, { id: "problem-retry" })], { stopReason: "toolUse" }),
 		]);
 		const agent = createPracticeAgent({ chatId, chatStore }, { engine });
 		await agent.prompt("Pose a synthetic problem.");

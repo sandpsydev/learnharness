@@ -327,15 +327,18 @@ for (const toolName of ["ask_user_question", "quiz"] as const) for (const failur
 		explanation: "A socket carries bytes between programs.", correctAnswer: "bytes",
 	};
 	const question = toAskScenario(toolName, questionInput);
+	const callIndex = question.findIndex((line) => JSON.parse(line).fake === "call");
+	assert.ok(callIndex > 0);
+	const toolMessage = question.slice(0, callIndex);
 	const rejectedId = "toolu_refused_after_answer";
-	const refused = question.slice(0, 6).map((line) => line.replaceAll(ASK_ID, rejectedId));
+	const refused = toolMessage.map((line) => line.replaceAll(ASK_ID, rejectedId));
 	refused.push(JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: rejectedId, is_error: true, content: "Invalid arguments" }] } }));
 	const unexpected = failure === "native" ? [
 		streamEvent({ type: "message_start", message: { usage: {} } }),
 		streamEvent({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_native", name: "ToolSearch", input: {} } }),
 	] : failure === "refused" ? refused : [streamEvent({ type: "message_start", message: { usage: {} } })];
 	const scenario = failure === "moved-on" ? [
-		...question.slice(0, 6),
+		...toolMessage,
 		JSON.stringify({ fake: "start-call", id: ASK_ID, name: toolName, arguments: questionInput }),
 		JSON.stringify({ fake: "wait-for-message" }),
 		...unexpected,

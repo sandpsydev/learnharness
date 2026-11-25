@@ -130,7 +130,7 @@ function assertPreserved(before: LhMessage[], saved: LhMessage[]): void {
 describe("failed-response Retry (issue #110)", () => {
 	it("retries from the saved answer, preserving the full input and failed attempt", async () => {
 		const { engine, contexts, histories } = scripted([
-			() => fauxAssistantMessage([fauxToolCall("quiz", QUIZ_INPUT, { id: "call-1" })], { stopReason: "toolUse" }),
+			() => fauxAssistantMessage([fauxText("Mercury is the innermost planet, closest to the Sun."), fauxToolCall("quiz", QUIZ_INPUT, { id: "call-1" })], { stopReason: "toolUse" }),
 			networkFailure,
 			() => fauxAssistantMessage([fauxText("Right — Mercury it is.")]),
 		]);
@@ -415,7 +415,7 @@ describe("retained generations and Pi's native provider filtering", () => {
 	it("still repairs an unanswered call from a completed generation", () => {
 		const faux = createFauxCore({});
 		const question: LhMessage = {
-			...fauxAssistantMessage([fauxToolCall("quiz", QUIZ_INPUT, { id: "unanswered-question" })], { stopReason: "toolUse" }), id: "question",
+			...fauxAssistantMessage([fauxText("Mercury is the innermost planet, closest to the Sun."), fauxToolCall("quiz", QUIZ_INPUT, { id: "unanswered-question" })], { stopReason: "toolUse" }), id: "question",
 		};
 		const messages = [newUserMessage("hello"), question, newUserMessage("move on")];
 		const before = JSON.parse(JSON.stringify(messages));

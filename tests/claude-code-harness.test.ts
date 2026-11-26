@@ -50,7 +50,7 @@ function streamEvent(event: object): string {
 	return JSON.stringify({ type: "stream_event", event });
 }
 
-function toAskScenario(): string[] {
+function toAskScenario(toolName = "ask_user_question", input: object = ASK_INPUT): string[] {
 	return [
 		streamEvent({ type: "message_start", message: { usage: {} } }),
 		streamEvent({ type: "content_block_start", index: 2, content_block: { type: "text", text: "" } }),
@@ -59,13 +59,13 @@ function toAskScenario(): string[] {
 		streamEvent({
 			type: "content_block_start",
 			index: 0,
-			content_block: { type: "tool_use", id: ASK_ID, name: "mcp__learnharness__ask_user_question", input: {} },
+			content_block: { type: "tool_use", id: ASK_ID, name: `mcp__learnharness__${toolName}`, input: {} },
 		}),
-		streamEvent({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(ASK_INPUT) } }),
+		streamEvent({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(input) } }),
 		streamEvent({ type: "content_block_stop", index: 0 }),
 		streamEvent({ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: {} }),
 		streamEvent({ type: "message_stop" }),
-		JSON.stringify({ fake: "call", id: ASK_ID, name: "ask_user_question", arguments: ASK_INPUT }),
+		JSON.stringify({ fake: "call", id: ASK_ID, name: toolName, arguments: input }),
 		JSON.stringify({ fake: "reply" }),
 	];
 }
@@ -319,4 +319,56 @@ test("a question answered after the idle timeout starts a fresh CLI process that
 	assert.ok(replay.includes(ASK_INPUT.question), replay);
 	assert.ok(replay.includes("[earlier tool result: ask_user_question]"), replay);
 	assert.ok(replay.includes(ANSWER_TEXT), replay);
+});
+
+for (const toolName of ["ask_user_question", "quiz"] as const) for (const failure of ["native", "refused", "moved-on"] as const) test(`${failure}: a saved ${toolName} answer survives automatic Claude recovery through the chat handler`, async (t) => {
+	const questionInput = toolName === "ask_user_question" ? ASK_INPUT : {
+		type: "check", nodeId: "sockets", question: "What does a socket carry?", options: [{ label: "Bytes", value: "bytes" }, { label: "Paper", value: "paper" }],
+		explanation: "A socket carries bytes between programs.", correctAnswer: "bytes",
+	};
+	const question = toAskScenario(toolName, questionInput);
+	const callIndex = question.findIndex((line) => JSON.parse(line).fake === "call");
+	assert.ok(callIndex > 0);
+	const toolMessage = question.slice(0, callIndex);
+	const rejectedId = "toolu_refused_after_answer";
+	const refused = toolMessage.map((line) => line.replaceAll(ASK_ID, rejectedId));
+	refused.push(JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: rejectedId, is_error: true, content: "Invalid arguments" }] } }));
+	const unexpected = failure === "native" ? [
+		streamEvent({ type: "message_start", message: { usage: {} } }),
+		streamEvent({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_native", name: "ToolSearch", input: {} } }),
+	] : failure === "refused" ? refused : [streamEvent({ type: "message_start", message: { usage: {} } })];
+	const scenario = failure === "moved-on" ? [
+		...toolMessage,
+		JSON.stringify({ fake: "start-call", id: ASK_ID, name: toolName, arguments: questionInput }),
+		JSON.stringify({ fake: "wait-for-message" }),
+		...unexpected,
+	] : [...question.slice(0, -1), ...unexpected];
+	const fakeRun = createFakeRun(t, [scenario, readFileSync(TEXT_FIXTURE, "utf8").trim().split("\n")]);
+	const factory = createAgentFactory(fakeRun);
+	const chatId = createClaudeCodeChat(t);
+	await runChatTurn(chatId, { type: "text", text: "teach me sockets" }, factory);
+	assert.equal(danglingQuestionOf(chatStore.getChat(chatId)!.messages)?.toolCallId, ASK_ID);
+	if (failure === "moved-on") {
+		fakeRun.children[0]!.send("CLI idle watchdog expired");
+		await waitForExit(fakeRun.children[0]!);
+	}
+	const answer = toolName === "ask_user_question" ? toAnswerInput() : {
+		type: "answer", toolCallId: ASK_ID,
+		answer: { kind: "quiz", tool: "quiz", questionText: questionInput.question, dontKnow: false,
+			answers: [{ index: 0, label: "Bytes" }], correct: true, thinking: ANSWER_TEXT, confidence: 80, answeredAt: new Date().toISOString() },
+	};
+	await runChatTurn(chatId, answer, factory);
+	assert.equal(fakeRun.children.length, 2);
+	const messages = chatStore.getChat(chatId)!.messages;
+	const answers = messages.filter((message) => message.role === "toolResult" && message.toolCallId === ASK_ID);
+	assert.equal(answers.length, 1, "the answer must remain saved exactly once");
+	assert.ok(JSON.stringify(answers[0]).includes(ANSWER_TEXT));
+	assert.equal(messages.some((message) => message.role === "assistant" && message.stopReason === "error"), false);
+	assert.equal(danglingQuestionOf(messages), null);
+	assert.equal(getLastAssistantText(chatId), "hello there");
+	const replay = readFileSync(fakeRun.stdinFiles[1]!, "utf8");
+	assert.ok(replay.includes(ANSWER_TEXT));
+	assert.ok(replay.includes(`[earlier tool result: ${toolName}]`));
+	assert.equal(replay.includes(rejectedId), false);
+	await Promise.all(fakeRun.children.map(waitForExit));
 });
